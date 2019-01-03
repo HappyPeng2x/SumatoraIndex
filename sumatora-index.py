@@ -26,82 +26,86 @@ __email__ =  "nicolas.centa@happypeng.org"
 __license__ = "GPLv3"
 __maintainer__ = "developer"
 __status__ = "Production"
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import xml.sax
 import sqlite3
 import sys
 import getopt
 
+from xml.sax.saxutils import XMLGenerator
+
 class JMDictHandler(xml.sax.ContentHandler):
-    def __init__(self, aCur):
-        self.mCur = aCur
-        self.mLang = ""
-        self.mStartSense = False
-        self.mCurrentLang = "eng"
-        self.mSenseId = 0
+    def __init__(self, aOut):
+        self.mOut = aOut
+
+        self.mReadings = ""
+        self.mWritings = ""
+        
+        self.mSense = ""
+        self.mSenseId = 1
+
         self.mSeq = 0
         self.mText = ""
+        self.mCurrentLang = ""
+        
+        self.mLang = ""
+        self.mStartSense = False
+
         self.mKeb = ""
-        self.mKeInf = ""
-        self.mKebId = 0
+        self.mKePri = False
+
         self.mReb = ""
-        self.mReInf = ""
-        self.mRebId = 0
-        self.mGlossId = 0
-        self.mPosId = 0
+        self.mRePri = False
+
+        self.mEntryOpened = False
 
     def endElement(self, aName):
         if aName == "ent_seq":
             self.mSeq = int(self.mText)
-            self.mCur.execute("INSERT INTO seqs (seq) VALUES (?)", [(self.mSeq)])
-        elif aName == "k_ele":                
+        elif aName == "gloss":
+            if self.mSense != "":
+                self.mSense = self.mSense + "\n"
+            self.mSense = self.mSense + str(self.mSenseId) + " - " + self.mText
+        elif aName == "k_ele":
+            if self.mWritings != "":
+                self.mWritings = self.mWritings + " "
+            if self.mKePri == True:
+                self.mWritings = self.mWritings + "_" + self.mKeb
+            else:
+                self.mWritings = self.mWritings + self.mKeb
             self.mKeb = ""
-            self.mKeInf = ""            
-            self.mKebId = self.mKebId + 1
+            self.mKePri = False
         elif aName == "keb":
             self.mKeb = self.mText
-            self.mCur.execute("INSERT INTO writings (seq, keb_id, keb) VALUES (?, ?, ?)",
-                              (self.mSeq, self.mKebId, self.mKeb))
-        elif aName == "ke_inf":
-            self.mKeInf = self.mText
-            self.mCur.execute("INSERT INTO writings_inf (seq, keb_id, ke_inf) VALUES (?, ?, ?)",
-                              (self.mSeq, self.mKebId, self.mKeInf))
         elif aName == "ke_pri":
-            self.mCur.execute("INSERT INTO writings_prio (seq, keb_id, ke_pri) VALUES (?, ?, ?)",
-                              (self.mSeq, self.mKebId, self.mText))
+            self.mKePri = True
         elif aName == "re_pri":
-            self.mCur.execute("INSERT INTO readings_prio (seq, reb_id, re_pri) VALUES (?, ?, ?)",
-                              (self.mSeq, self.mRebId, self.mText))
-        elif aName == "r_ele":            
+            self.mRePri = True
+        elif aName == "r_ele":
+            if self.mReadings != "":
+                self.mReadings = self.mReadings + " "
+            if self.mRePri == True:
+                self.mReadings = self.mReadings + "_" + self.mReb
+            else:
+                self.mReadings = self.mReadings + self.mReb                
             self.mReb = ""
-            self.mReInf = ""
-            self.mRebId = self.mRebId + 1
+            self.mRePri = False
         elif aName == "reb":
             self.mReb = self.mText
-            self.mCur.execute("INSERT INTO readings (seq, reb_id, reb) VALUES (?, ?, ?)",
-                              (self.mSeq, self.mRebId, self.mReb))
-        elif aName == "re_inf":
-            self.mReInf = self.mText
-            self.mCur.execute("INSERT INTO readings_inf (seq, reb_id, re_inf) VALUES (?, ?, ?)",
-                              (self.mSeq, self.mRebId, self.mReInf))
-
-        elif aName == "gloss":
-            self.mCur.execute("INSERT INTO gloss (seq, sense_id, lang, gloss_id, gloss) VALUES (?, ?, ?, ?, ?)",
-                              (self.mSeq, self.mSenseId, self.mLang, self.mGlossId, self.mText))
-            self.mGlossId = self.mGlossId + 1
-        elif aName == "pos":
-            self.mCur.execute("INSERT INTO pos (seq, sense_id, pos_id, pos) VALUES (?, ?, ?, ?)",
-                              (self.mSeq, self.mSenseId, self.mPosId, self.mText))
-            self.mPosId = self.mPosId + 1
-        elif aName == "entry":
-            self.mSenseId = 0
-            self.mPosId = 0
-            self.mGlossId = 0
-            self.mKebId = 0
-            self.mRebId = 0
-            self.mCurrentLang = "eng"
-
+        elif aName == "entry":            
+            if self.mSense != "":
+                self.mOut.startElement("sense", {"lang" : self.mCurrentLang})
+                self.mOut.characters(self.mSense)
+                self.mOut.endElement("sense")
+            self.mOut.endElement("entry")
+            self.mCurrentLang = ""
+            self.mWritings = ""
+            self.mReadings = ""
+            self.mGloss = ""
+            self.mSense = ""
+            self.mSenseId = 1
+            self.mEntryOpened = False
         self.mText = ""
         
     def startElement(self, aName, aAttrs):
@@ -112,17 +116,26 @@ class JMDictHandler(xml.sax.ContentHandler):
 
         if aName == "sense":
             self.mStartSense = True
-            self.mPosId = 0
-            self.mGlossId = 0
+            
+            if self.mEntryOpened == False:
+                self.mOut.startElement("entry", {"seq" : str(self.mSeq),
+                                                 "writings" : self.mWritings,
+                                                 "readings" : self.mReadings})
+                self.mEntryOpened = True
         elif (aName == "pos" or aName == "gloss") and self.mStartSense:
             self.mStartSense = False
-
+            
             if self.mLang == "":
                 self.mLang = "eng"
-
+        
             if not self.mCurrentLang == self.mLang:
+                if self.mSense != "":
+                    self.mOut.startElement("sense", {"lang" : self.mCurrentLang})
+                    self.mOut.characters(self.mSense)
+                    self.mOut.endElement("sense")
+                self.mSense = ""
+                self.mSenseId = 1
                 self.mCurrentLang = self.mLang
-                self.mSenseId = 0
             else:
                 self.mSenseId = self.mSenseId + 1
 
@@ -130,14 +143,15 @@ class JMDictHandler(xml.sax.ContentHandler):
         if len(aContent.strip()) > 0:
             self.mText = self.mText + aContent
 
-HELP_STRING = """usage: sumatora-index.py -i <JMdict input file> -o <JMdict.db output file>"""
+HELP_STRING = """usage: sumatora-index.py -d <date> -i <JMdict input file> -o <JMdict.xml output file>"""
 
 def main(argv):
     inputfile = ""
     outputfile = ""
+    date = ""
 
     try:
-        opts, args = getopt.getopt(argv, "hi:o:", ["ifile=", "ofile="])
+        opts, args = getopt.getopt(argv, "hi:o:d:", ["ifile=", "ofile=", "date="])
     except getopt.GetoptError:
         print(HELP_STRING)
         sys.exit(2)
@@ -150,52 +164,19 @@ def main(argv):
             inputfile = arg
         elif opt in ("-o", "--ofile"):
             outputfile = arg
-    
-    if inputfile == "" or outputfile == "":
+        elif opt in ("-d", "--date"):
+            date = arg
+            
+    if inputfile == "" or outputfile == "" or date == "":
         print(HELP_STRING)
         sys.exit(2)
-            
-    conn = sqlite3.connect(outputfile, isolation_level=None)
-    cur = conn.cursor()
 
-    cur.execute("PRAGMA foreign_keys = ON")
-    
-    cur.execute("DROP TABLE IF EXISTS seqs")
-    cur.execute("DROP TABLE IF EXISTS writings")
-    cur.execute("DROP TABLE IF EXISTS readings")
-    cur.execute("DROP TABLE IF EXISTS writings_inf")
-    cur.execute("DROP TABLE IF EXISTS readings_inf")
-    cur.execute("DROP TABLE IF EXISTS pos")
-    cur.execute("DROP TABLE IF EXISTS gloss")
-    cur.execute("DROP TABLE IF EXISTS writings_prio")
-    cur.execute("DROP TABLE IF EXISTS readings_prio")
+    of = open(outputfile, "w")
+    gen = XMLGenerator(out=of, encoding="utf-8", short_empty_elements=True)
+    gen.startDocument()
+    gen.startElement("dict", {"version" : "1", "date" : date})
 
-    cur.execute("CREATE TABLE seqs (seq INTEGER PRIMARY KEY)")
-    cur.execute("CREATE TABLE writings (seq INTEGER, keb_id INTEGER, keb TEXT, " \
-                + "PRIMARY KEY (seq, keb_id), " \
-                + "FOREIGN KEY (seq) REFERENCES seqs (seq))")
-    cur.execute("CREATE TABLE writings_inf (seq INTEGER, keb_id INTEGER, ke_inf TEXT, " \
-                + "FOREIGN KEY (seq, keb_id) REFERENCES writings (seq, keb_id))")
-    cur.execute("CREATE TABLE writings_prio (seq INTEGER, keb_id INTEGER, ke_pri TEXT, " \
-                + "FOREIGN KEY (seq, keb_id) REFERENCES writings (seq, keb_id))")
-    cur.execute("CREATE TABLE readings (seq INTEGER, reb_id INTEGER, reb TEXT, " \
-                + "PRIMARY KEY (seq, reb_id), " \
-                + "FOREIGN KEY (seq) REFERENCES seqs (seq))")
-    cur.execute("CREATE TABLE readings_inf (seq INTEGER, reb_id INTEGER, re_inf TEXT, " \
-                + "FOREIGN KEY (seq, reb_id) REFERENCES readings (seq, reb_id))")
-    cur.execute("CREATE TABLE readings_prio (seq INTEGER, reb_id INTEGER, re_pri TEXT, " \
-                + "FOREIGN KEY (seq, reb_id) REFERENCES readings (seq, reb_id))")
-    cur.execute("CREATE TABLE pos (seq INTEGER, sense_id INTEGER, pos_id INTEGER, pos TEXT, " \
-                + "PRIMARY KEY (seq, sense_id, pos_id), " \
-                + "FOREIGN KEY (seq) REFERENCES seqs (seq))")
-    cur.execute("CREATE TABLE gloss (seq INTEGER, sense_id INTEGER, lang TEXT, gloss_id INTEGER, gloss TEXT, " \
-                + "PRIMARY KEY (seq, sense_id, lang, gloss_id), " \
-                + "FOREIGN KEY (seq) REFERENCES seqs (seq))")
-    
-    cur.execute("BEGIN TRANSACTION")
-    
-    handler = JMDictHandler(cur)
-    
+    handler = JMDictHandler(gen)
     parser = xml.sax.make_parser()
     parser.setContentHandler(handler)
     
@@ -205,7 +186,9 @@ def main(argv):
     
     f.close()
 
-    cur.execute("END TRANSACTION")
+    gen.endElement("dict")
+
+    of.close()
 
 if __name__ == "__main__":
    main(sys.argv[1:])
