@@ -36,14 +36,15 @@ import getopt
 from xml.sax.saxutils import XMLGenerator
 
 class JMDictHandler(xml.sax.ContentHandler):
-    def __init__(self, aOut):
-        self.mOut = aOut
+    def __init__(self, aCur):
+        self.mCur = aCur
 
         self.mReadings = ""
         self.mWritings = ""
         
         self.mSense = ""
         self.mSenseId = 1
+        self.mCurrentSenseId = 0
 
         self.mSeq = 0
         self.mText = ""
@@ -60,20 +61,28 @@ class JMDictHandler(xml.sax.ContentHandler):
 
         self.mEntryOpened = False
 
+    def insertEntry(self):
+        self.mCur.execute("INSERT INTO DictionaryEntry (seq, readings, writings, " \
+                                  + "lang, gloss, bookmark) VALUES (?, ?, ?, ?, ?, ?)", \
+                                  (self.mSeq, self.mReadings, self.mWritings, self.mCurrentLang,
+                                   self.mSense, ""))
+        
     def endElement(self, aName):
         if aName == "ent_seq":
             self.mSeq = int(self.mText)
         elif aName == "gloss":
-            if self.mSense != "":
-                self.mSense = self.mSense + "\n"
-            self.mSense = self.mSense + str(self.mSenseId) + " - " + self.mText
+            if self.mSenseId == self.mCurrentSenseId:
+                self.mSense = self.mSense + ", " + self.mText
+            else:
+                self.mSense = self.mSense + "\n" + str(self.mSenseId) + ". " + self.mText
+                self.mCurrentSenseId = self.mSenseId
         elif aName == "k_ele":
             if self.mWritings != "":
                 self.mWritings = self.mWritings + " "
             if self.mKePri == True:
-                self.mWritings = self.mWritings + "_" + self.mKeb
+                self.mWritings = self.mWritings + "/" + self.mKeb + "/"
             else:
-                self.mWritings = self.mWritings + self.mKeb
+                self.mWritings = self.mWritings + "-" + self.mKeb + "-"
             self.mKeb = ""
             self.mKePri = False
         elif aName == "keb":
@@ -86,25 +95,22 @@ class JMDictHandler(xml.sax.ContentHandler):
             if self.mReadings != "":
                 self.mReadings = self.mReadings + " "
             if self.mRePri == True:
-                self.mReadings = self.mReadings + "_" + self.mReb
+                self.mReadings = self.mReadings + "/" + self.mReb + "/"
             else:
-                self.mReadings = self.mReadings + self.mReb                
+                self.mReadings = self.mReadings + "-" + self.mReb + "-"                
             self.mReb = ""
             self.mRePri = False
         elif aName == "reb":
             self.mReb = self.mText
         elif aName == "entry":            
             if self.mSense != "":
-                self.mOut.startElement("sense", {"lang" : self.mCurrentLang})
-                self.mOut.characters(self.mSense)
-                self.mOut.endElement("sense")
-            self.mOut.endElement("entry")
+                self.insertEntry()
             self.mCurrentLang = ""
             self.mWritings = ""
             self.mReadings = ""
-            self.mGloss = ""
             self.mSense = ""
             self.mSenseId = 1
+            self.mCurrentSenseId = 0
             self.mEntryOpened = False
         self.mText = ""
         
@@ -118,9 +124,6 @@ class JMDictHandler(xml.sax.ContentHandler):
             self.mStartSense = True
             
             if self.mEntryOpened == False:
-                self.mOut.startElement("entry", {"seq" : str(self.mSeq),
-                                                 "writings" : self.mWritings,
-                                                 "readings" : self.mReadings})
                 self.mEntryOpened = True
         elif (aName == "pos" or aName == "gloss") and self.mStartSense:
             self.mStartSense = False
@@ -130,11 +133,10 @@ class JMDictHandler(xml.sax.ContentHandler):
         
             if not self.mCurrentLang == self.mLang:
                 if self.mSense != "":
-                    self.mOut.startElement("sense", {"lang" : self.mCurrentLang})
-                    self.mOut.characters(self.mSense)
-                    self.mOut.endElement("sense")
+                    self.insertEntry()
                 self.mSense = ""
                 self.mSenseId = 1
+                self.mCurrentSenseId = 0
                 self.mCurrentLang = self.mLang
             else:
                 self.mSenseId = self.mSenseId + 1
@@ -171,12 +173,20 @@ def main(argv):
         print(HELP_STRING)
         sys.exit(2)
 
-    of = open(outputfile, "w")
-    gen = XMLGenerator(out=of, encoding="utf-8", short_empty_elements=True)
-    gen.startDocument()
-    gen.startElement("dict", {"version" : "1", "date" : date})
+    conn = sqlite3.connect(outputfile, isolation_level=None)
+    cur = conn.cursor()
 
-    handler = JMDictHandler(gen)
+    cur.execute("DROP TABLE IF EXISTS DictionaryEntry")
+    cur.execute("DROP TABLE IF EXISTS DictionaryControl")
+
+    cur.execute("CREATE TABLE DictionaryEntry (seq INTEGER, readings TEXT, writings TEXT, " \
+                + "lang TEXT NOT NULL, gloss TEXT, bookmark TEXT, PRIMARY KEY (seq, lang))")
+    cur.execute("CREATE TABLE DictionaryControl (control TEXT NOT NULL, value INTEGER, " \
+                + "PRIMARY KEY (control))")
+
+    cur.execute("BEGIN TRANSACTION")
+    
+    handler = JMDictHandler(cur)
     parser = xml.sax.make_parser()
     parser.setContentHandler(handler)
     
@@ -186,9 +196,12 @@ def main(argv):
     
     f.close()
 
-    gen.endElement("dict")
+    #cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
+    #            ("date", date))
+    #cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
+    #            ("imported", 1))
 
-    of.close()
+    cur.execute("END TRANSACTION")
 
 if __name__ == "__main__":
    main(sys.argv[1:])
