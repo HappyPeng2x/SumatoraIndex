@@ -40,7 +40,9 @@ class JMDictHandler(xml.sax.ContentHandler):
         self.mCur = aCur
 
         self.mReadings = ""
+        self.mReadingsPrio = ""
         self.mWritings = ""
+        self.mWritingsPrio = ""
         
         self.mSense = ""
         self.mSenseId = 1
@@ -61,11 +63,30 @@ class JMDictHandler(xml.sax.ContentHandler):
 
         self.mEntryOpened = False
 
+    def calculateParts(self, aString):
+        result = ""
+
+        for i in range(1, len(aString)):
+            if result != "":
+                result = result + " "
+            result = result + aString[i:]
+
+        return result
+
+    def insertTranslation(self):
+        self.mCur.execute("INSERT INTO DictionaryTranslation (seq, lang, gloss) " \
+                                  + "VALUES (?, ?, ?)", \
+                                  (self.mSeq, self.mCurrentLang, self.mSense))
+        
     def insertEntry(self):
-        self.mCur.execute("INSERT INTO DictionaryEntry (seq, readings, writings, " \
-                                  + "lang, gloss, bookmark) VALUES (?, ?, ?, ?, ?, ?)", \
-                                  (self.mSeq, self.mReadings, self.mWritings, self.mCurrentLang,
-                                   self.mSense, ""))
+        self.mCur.execute("INSERT INTO DictionaryEntry (seq, readingsPrio, readingsPrioParts, " \
+                          + "readings, readingsParts, writingsPrio, writingsPrioParts, " \
+                          + "writings, writingsParts) " \
+                          + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", \
+                          (self.mSeq, self.mReadingsPrio, self.calculateParts(self.mReadingsPrio), \
+                           self.mReadings, self.calculateParts(self.mReadings), \
+                           self.mWritingsPrio, self.calculateParts(self.mWritingsPrio), \
+                           self.mWritings, self.calculateParts(self.mWritings)))
         
     def endElement(self, aName):
         if aName == "ent_seq":
@@ -77,12 +98,14 @@ class JMDictHandler(xml.sax.ContentHandler):
                 self.mSense = self.mSense + "\n" + str(self.mSenseId) + ". " + self.mText
                 self.mCurrentSenseId = self.mSenseId
         elif aName == "k_ele":
-            if self.mWritings != "":
-                self.mWritings = self.mWritings + " "
             if self.mKePri == True:
-                self.mWritings = self.mWritings + "/" + self.mKeb + "/"
+                if self.mWritingsPrio != "":
+                    self.mWritingsPrio = self.mWritingsPrio + " "
+                self.mWritingsPrio = self.mWritingsPrio + self.mKeb
             else:
-                self.mWritings = self.mWritings + "-" + self.mKeb + "-"
+                if self.mWritings != "":
+                    self.mWritings = self.mWritings + " "
+                self.mWritings = self.mWritings + self.mKeb
             self.mKeb = ""
             self.mKePri = False
         elif aName == "keb":
@@ -92,22 +115,28 @@ class JMDictHandler(xml.sax.ContentHandler):
         elif aName == "re_pri":
             self.mRePri = True
         elif aName == "r_ele":
-            if self.mReadings != "":
-                self.mReadings = self.mReadings + " "
             if self.mRePri == True:
-                self.mReadings = self.mReadings + "/" + self.mReb + "/"
+                if self.mReadingsPrio != "":
+                    self.mReadingsPrio = self.mReadingsPrio + " "
+                self.mReadingsPrio = self.mReadingsPrio + self.mReb
             else:
-                self.mReadings = self.mReadings + "-" + self.mReb + "-"                
+                if self.mReadings != "":
+                    self.mReadings = self.mReadings + " "
+                self.mReadings = self.mReadings + self.mReb
             self.mReb = ""
             self.mRePri = False
         elif aName == "reb":
             self.mReb = self.mText
-        elif aName == "entry":            
+        elif aName == "entry":
+            self.insertEntry()
+            
             if self.mSense != "":
-                self.insertEntry()
+                self.insertTranslation()
             self.mCurrentLang = ""
             self.mWritings = ""
+            self.mWritingsPrio = ""
             self.mReadings = ""
+            self.mReadingsPrio = ""
             self.mSense = ""
             self.mSenseId = 1
             self.mCurrentSenseId = 0
@@ -133,7 +162,7 @@ class JMDictHandler(xml.sax.ContentHandler):
         
             if not self.mCurrentLang == self.mLang:
                 if self.mSense != "":
-                    self.insertEntry()
+                    self.insertTranslation()
                 self.mSense = ""
                 self.mSenseId = 1
                 self.mCurrentSenseId = 0
@@ -145,7 +174,7 @@ class JMDictHandler(xml.sax.ContentHandler):
         if len(aContent.strip()) > 0:
             self.mText = self.mText + aContent
 
-HELP_STRING = """usage: sumatora-index.py -d <date> -i <JMdict input file> -o <JMdict.xml output file>"""
+HELP_STRING = """usage: sumatora-index.py -d <date> -i <JMdict input file> -o <JMdict.db output file>"""
 
 def main(argv):
     inputfile = ""
@@ -177,12 +206,30 @@ def main(argv):
     cur = conn.cursor()
 
     cur.execute("DROP TABLE IF EXISTS DictionaryEntry")
+    cur.execute("DROP TABLE IF EXISTS DictionaryTranslation")
     cur.execute("DROP TABLE IF EXISTS DictionaryControl")
-
-    cur.execute("CREATE TABLE DictionaryEntry (seq INTEGER, readings TEXT, writings TEXT, " \
-                + "lang TEXT NOT NULL, gloss TEXT, bookmark TEXT, PRIMARY KEY (seq, lang))")
+    cur.execute("DROP TABLE IF EXISTS DictionaryIndex")
+    cur.execute("DROP TABLE IF EXISTS DictionaryBookmark")
+    cur.execute("DROP TABLE IF EXISTS DictionarySearchResult")
+    
+    cur.execute("CREATE TABLE DictionaryEntry (seq INTEGER, readingsPrio TEXT, " \
+                + "readingsPrioParts TEXT, readings TEXT, readingsParts TEXT, " \
+                + "writingsPrio TEXT, writingsPrioParts TEXT, writings TEXT, " \
+                + "writingsParts TEXT, PRIMARY KEY (seq))")
+    cur.execute("CREATE TABLE DictionaryTranslation (seq INTEGER, lang TEXT NOT NULL, " \
+                + "gloss TEXT, PRIMARY KEY (seq, lang))")
+    cur.execute("CREATE TABLE DictionaryBookmark (seq INTEGER, bookmark INTEGER, " \
+                + "PRIMARY KEY (seq))")
     cur.execute("CREATE TABLE DictionaryControl (control TEXT NOT NULL, value INTEGER, " \
                 + "PRIMARY KEY (control))")
+    cur.execute("CREATE VIRTUAL TABLE DictionaryIndex USING fts4(content=\"DictionaryEntry\", " \
+                + "readingsPrio, readingsPrioParts, readings, readingsParts, " \
+                + "writingsPrio, writingsPrioParts, writings, writingsParts)")
+    cur.execute("CREATE TABLE DictionarySearchResult (entryOrder INTEGER, seq INTEGER, " \
+                + "readingsPrio TEXT, " \
+                + "readings TEXT, " \
+                + "writingsPrio TEXT, writings TEXT, " \
+                + "lang TEXT, gloss TEXT, PRIMARY KEY (seq))")
 
     cur.execute("BEGIN TRANSACTION")
     
@@ -196,12 +243,21 @@ def main(argv):
     
     f.close()
 
-    #cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
-    #            ("date", date))
-    #cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
-    #            ("imported", 1))
+    cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
+                ("date", date))
+    cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
+                ("version", 2))
 
+    # Test bookmarks
+    #cur.execute("INSERT INTO DictionaryBookmark (seq, bookmark) VALUES (?, ?)", \
+    #            (1311110, 1))
+    #cur.execute("INSERT INTO DictionaryBookmark (seq, bookmark) VALUES (?, ?)", \
+    #            (1311125, 1))
+
+                
     cur.execute("END TRANSACTION")
 
+    cur.execute("INSERT INTO DictionaryIndex (DictionaryIndex) VALUES ('rebuild')")
+
 if __name__ == "__main__":
-   main(sys.argv[1:])
+    main(sys.argv[1:])
