@@ -74,20 +74,27 @@ class JMDictHandler(xml.sax.ContentHandler):
         return result
 
     def insertTranslation(self):
-        self.mCur.execute("INSERT INTO DictionaryTranslation (seq, lang, gloss) " \
-                                  + "VALUES (?, ?, ?)", \
-                                  (self.mSeq, self.mCurrentLang, self.mSense))
-        
+        try:
+            self.mCur.execute("INSERT INTO DictionaryTranslation (seq, lang, gloss) " \
+                              + "VALUES (?, ?, ?)", \
+                              (self.mSeq, self.mCurrentLang, self.mSense))
+        except:
+            print("DictionaryTranslation: ignoring seq " + str(self.mSeq) + " lang " + \
+                  self.mCurrentLang + " because of error")
+            
     def insertEntry(self):
-        self.mCur.execute("INSERT INTO DictionaryEntry (seq, readingsPrio, readingsPrioParts, " \
-                          + "readings, readingsParts, writingsPrio, writingsPrioParts, " \
-                          + "writings, writingsParts) " \
-                          + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", \
-                          (self.mSeq, self.mReadingsPrio, self.calculateParts(self.mReadingsPrio), \
-                           self.mReadings, self.calculateParts(self.mReadings), \
-                           self.mWritingsPrio, self.calculateParts(self.mWritingsPrio), \
-                           self.mWritings, self.calculateParts(self.mWritings)))
-        
+        try:
+            self.mCur.execute("INSERT INTO DictionaryEntry (seq, readingsPrio, readingsPrioParts, " \
+                              + "readings, readingsParts, writingsPrio, writingsPrioParts, " \
+                              + "writings, writingsParts) " \
+                              + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", \
+                              (self.mSeq, self.mReadingsPrio, self.calculateParts(self.mReadingsPrio), \
+                               self.mReadings, self.calculateParts(self.mReadings), \
+                               self.mWritingsPrio, self.calculateParts(self.mWritingsPrio), \
+                               self.mWritings, self.calculateParts(self.mWritings)))
+        except:
+            print("DictionaryEntry: ignoring seq " + str(self.mSeq) + " because of error")
+            
     def endElement(self, aName):
         if aName == "ent_seq":
             self.mSeq = int(self.mText)
@@ -218,18 +225,11 @@ def main(argv):
                 + "writingsParts TEXT, PRIMARY KEY (seq))")
     cur.execute("CREATE TABLE DictionaryTranslation (seq INTEGER, lang TEXT NOT NULL, " \
                 + "gloss TEXT, PRIMARY KEY (seq, lang))")
-    cur.execute("CREATE TABLE DictionaryBookmark (seq INTEGER, bookmark INTEGER, " \
-                + "PRIMARY KEY (seq))")
     cur.execute("CREATE TABLE DictionaryControl (control TEXT NOT NULL, value INTEGER, " \
                 + "PRIMARY KEY (control))")
     cur.execute("CREATE VIRTUAL TABLE DictionaryIndex USING fts4(content=\"DictionaryEntry\", " \
                 + "readingsPrio, readingsPrioParts, readings, readingsParts, " \
                 + "writingsPrio, writingsPrioParts, writings, writingsParts)")
-    cur.execute("CREATE TABLE DictionarySearchResult (entryOrder INTEGER, seq INTEGER, " \
-                + "readingsPrio TEXT, " \
-                + "readings TEXT, " \
-                + "writingsPrio TEXT, writings TEXT, " \
-                + "lang TEXT, gloss TEXT, PRIMARY KEY (seq))")
 
     cur.execute("BEGIN TRANSACTION")
     
@@ -246,14 +246,7 @@ def main(argv):
     cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
                 ("date", date))
     cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)", \
-                ("version", 2))
-
-    # Test bookmarks
-    #cur.execute("INSERT INTO DictionaryBookmark (seq, bookmark) VALUES (?, ?)", \
-    #            (1311110, 1))
-    #cur.execute("INSERT INTO DictionaryBookmark (seq, bookmark) VALUES (?, ?)", \
-    #            (1311125, 1))
-
+                ("version", 3))
                 
     cur.execute("END TRANSACTION")
 
