@@ -4,7 +4,7 @@ This program generates the database for use with the Android application [Sumato
 
 ## Usage
 
-`sumatora-index.py -d <update date> -i <JMdict input file> -o <JMdict.db output file>`
+`sumatora-index.py -d <update date> -i <JMdict input file> -o <output directory>`
 
 Downloading [JMDict](https://www.edrdg.org/jmdict/j_jmdict.html) in XML format and gunzipping the file is required for processing with sumatora-index.py
 

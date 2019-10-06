@@ -33,8 +33,159 @@ import sys
 import getopt
 import libxml2
 import json
+import os
 
 from xml.sax import xmlreader, saxutils, SAXParseException, SAXException
+
+
+class SumatoraDBConnection(object):
+    def __init__(self, aConn):
+        self.conn = aConn
+        self.cur = self.conn.cursor()
+
+    def createTable(self):
+        self.cur.execute("DROP TABLE IF EXISTS DictionaryTranslation")
+
+        self.cur.execute("CREATE TABLE DictionaryTranslation "
+                         + "(seq INTEGER, "
+                         + "lang TEXT NOT NULL, "
+                         + "gloss TEXT, PRIMARY KEY (seq, lang))")
+
+    def close(self):
+        self.endTransaction()
+        self.conn.close()
+
+    def beginTransaction(self):
+        self.cur.execute("BEGIN TRANSACTION")
+
+    def endTransaction(self):
+        self.cur.execute("END TRANSACTION")
+
+
+class SumatoraDB(object):
+    def __init__(self, aFolder):
+        self.folder = aFolder
+
+        if not os.path.exists(self.folder):
+            os.makedirs(self.folder)
+
+        self.jmdictConn = sqlite3.connect(os.path.join(self.folder,
+                                                       "jmdict.db"),
+                                          isolation_level=None)
+        self.jmdictCur = self.jmdictConn.cursor()
+
+        self.translationDBs = {}
+
+    def close(self):
+        self.jmdictConn.close()
+
+        for k in self.translationDBs:
+            self.translationDBs[k].close()
+
+    def jmdictCreateTable(self):
+        self.jmdictCur.execute("DROP TABLE IF EXISTS DictionaryEntry")
+        self.jmdictCur.execute("DROP TABLE IF EXISTS DictionaryControl")
+        self.jmdictCur.execute("DROP TABLE IF EXISTS DictionaryIndex")
+        self.jmdictCur.execute("DROP TABLE IF EXISTS DictionaryEntity")
+
+        self.jmdictCur.execute("CREATE TABLE DictionaryEntry (seq INTEGER, "
+                               + "readingsPrio TEXT, "
+                               + "readingsPrioParts TEXT, "
+                               + "readings TEXT, "
+                               + "readingsParts TEXT, "
+                               + "writingsPrio TEXT, writingsPrioParts TEXT, "
+                               + "writings TEXT, "
+                               + "writingsParts TEXT, pos TEXT, "
+                               + "xref TEXT, ant TEXT, misc TEXT, "
+                               + "lsource TEXT, dial TEXT, s_inf TEXT, "
+                               + "field TEXT, PRIMARY KEY (seq))")
+        self.jmdictCur.execute("CREATE TABLE DictionaryControl "
+                               + "(control TEXT NOT NULL, value INTEGER, "
+                               + "PRIMARY KEY (control))")
+        self.jmdictCur.execute("CREATE VIRTUAL TABLE DictionaryIndex "
+                               + "USING fts4(content=\"DictionaryEntry\", "
+                               + "readingsPrio, readingsPrioParts, "
+                               + "readings, readingsParts, "
+                               + "writingsPrio, writingsPrioParts, "
+                               + "writings, writingsParts)")
+        self.jmdictCur.execute("CREATE TABLE DictionaryEntity "
+                               + "(name TEXT NOT NULL, content TEXT, "
+                               + "PRIMARY KEY (name))")
+
+    def jmdictBeginTransaction(self):
+        self.jmdictCur.execute("BEGIN TRANSACTION")
+
+    def jmdictEndTransaction(self):
+        self.jmdictCur.execute("END TRANSACTION")
+
+    def jmdictInsertControl(self, aDate, aVersion):
+        self.jmdictCur.execute("INSERT INTO DictionaryControl "
+                               + "(control, value) VALUES (?, ?)",
+                               ("date", aDate))
+        self.jmdictCur.execute("INSERT INTO DictionaryControl "
+                               + "(control, value) VALUES (?, ?)",
+                               ("version", aVersion))
+
+    def jmdictInsertEntities(self, aEntities):
+        for e in aEntities:
+            self.jmdictCur.execute("INSERT INTO DictionaryEntity "
+                                   + "(name, content) VALUES (?, ?)",
+                                   (e, aEntities[e]))
+
+    def jmdictBuildIndex(self):
+        self.jmdictCur.execute("INSERT INTO DictionaryIndex "
+                               + "(DictionaryIndex) VALUES ('rebuild')")
+
+    def jmdictInsertEntry(self, aSeq, aReadingsPrio,
+                          aReadingsPrioParts, aReadings, aReadingsParts,
+                          aWritingsPrio, aWritingsPrioParts,
+                          aWritings, aWritingsParts, aPos, aXref, aAnt,
+                          aMisc, aLSource, aDial, aSInf, aField):
+        self.jmdictCur.execute("INSERT INTO DictionaryEntry "
+                               + "(seq, readingsPrio, readingsPrioParts, "
+                               + "readings, readingsParts, "
+                               + "writingsPrio, writingsPrioParts, "
+                               + "writings, writingsParts, pos, "
+                               + "xref, ant, misc, lsource, "
+                               + "dial, s_inf, field) "
+                               + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+                               + "?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               (aSeq,
+                                aReadingsPrio,
+                                aReadingsPrioParts,
+                                aReadings,
+                                aReadingsParts,
+                                aWritingsPrio,
+                                aWritingsPrioParts,
+                                aWritings,
+                                aWritingsParts,
+                                aPos,
+                                aXref,
+                                aAnt,
+                                aMisc,
+                                aLSource,
+                                aDial,
+                                aSInf,
+                                aField))
+
+    def translationInsert(self, aLang, aSeq, aSenseArray):
+        if aLang not in self.translationDBs:
+            conn = sqlite3.connect(os.path.join(self.folder,
+                                                aLang + ".db"),
+                                   isolation_level=None)
+
+            db = SumatoraDBConnection(conn)
+            db.createTable()
+            db.beginTransaction()
+            self.translationDBs[aLang] = db
+
+        self.translationDBs[aLang].cur.execute(
+            "INSERT INTO DictionaryTranslation "
+            + "(seq, lang, gloss) "
+            + "VALUES (?, ?, ?)",
+            (aSeq, aLang,
+             json.dumps(aSenseArray,
+                        ensure_ascii=False)))
 
 
 class Locator(xmlreader.Locator):
@@ -186,8 +337,8 @@ def noneOrJsonDumps(aTable):
 
 
 class JMDictHandler():
-    def __init__(self, aCur):
-        self.mCur = aCur
+    def __init__(self, aDB):
+        self.mDB = aDB
 
         self.mReadings = ""
         self.mReadingsPrio = ""
@@ -261,47 +412,35 @@ class JMDictHandler():
         return s
 
     def insertTranslation(self):
-        try:
-            self.mCur.execute("INSERT INTO DictionaryTranslation "
-                              + "(seq, lang, gloss) "
-                              + "VALUES (?, ?, ?)",
-                              (self.mSeq, self.mCurrentLang,
-                               json.dumps(self.mSenseArray,
-                                          ensure_ascii=False)))
-        except Exception:
-            print("DictionaryTranslation: ignoring seq " + str(self.mSeq) +
-                  " lang " + self.mCurrentLang + " because of error")
+        # try:
+        self.mDB.translationInsert(self.mCurrentLang,
+                                   self.mSeq,
+                                   self.mSenseArray)
+        # except Exception:
+        #    print("DictionaryTranslation: ignoring seq " + str(self.mSeq) +
+        #          " lang " + self.mCurrentLang + " because of error")
 
     def insertEntry(self):
-        try:
-            self.mCur.execute("INSERT INTO DictionaryEntry "
-                              + "(seq, readingsPrio, readingsPrioParts, "
-                              + "readings, readingsParts, "
-                              + "writingsPrio, writingsPrioParts, "
-                              + "writings, writingsParts, pos, "
-                              + "xref, ant, misc, lsource, "
-                              + "dial, s_inf, field) "
-                              + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
-                              + "?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                              (self.mSeq, self.mReadingsPrio,
-                               self.calculateParts(self.mReadingsPrio),
-                               self.mReadings,
-                               self.calculateParts(self.mReadings),
-                               self.mWritingsPrio,
-                               self.calculateParts(self.mWritingsPrio),
-                               self.mWritings,
-                               self.calculateParts(self.mWritings),
-                               noneOrJsonDumps(self.mPosArray),
-                               noneOrJsonDumps(self.mXrefArray),
-                               noneOrJsonDumps(self.mAntArray),
-                               noneOrJsonDumps(self.mMiscArray),
-                               noneOrJsonDumps(self.mLSourceArray),
-                               noneOrJsonDumps(self.mDialArray),
-                               noneOrJsonDumps(self.mSInfArray),
-                               noneOrJsonDumps(self.mFieldArray)))
-        except sqlite3.Error:
-            print("DictionaryEntry: ignoring seq " + str(self.mSeq) +
-                  " because of error")
+        # try:
+        self.mDB.jmdictInsertEntry(self.mSeq, self.mReadingsPrio,
+                                   self.calculateParts(self.mReadingsPrio),
+                                   self.mReadings,
+                                   self.calculateParts(self.mReadings),
+                                   self.mWritingsPrio,
+                                   self.calculateParts(self.mWritingsPrio),
+                                   self.mWritings,
+                                   self.calculateParts(self.mWritings),
+                                   noneOrJsonDumps(self.mPosArray),
+                                   noneOrJsonDumps(self.mXrefArray),
+                                   noneOrJsonDumps(self.mAntArray),
+                                   noneOrJsonDumps(self.mMiscArray),
+                                   noneOrJsonDumps(self.mLSourceArray),
+                                   noneOrJsonDumps(self.mDialArray),
+                                   noneOrJsonDumps(self.mSInfArray),
+                                   noneOrJsonDumps(self.mFieldArray))
+# except sqlite3.Error:
+#            print("DictionaryEntry: ignoring seq " + str(self.mSeq) +
+#                  " because of error")
 
     def startDocument(self):
         pass
@@ -469,12 +608,12 @@ class JMDictHandler():
 
 
 HELP_STRING = "usage: sumatora-index.py -d <date> -i " \
-    + "<JMdict input file> -o <JMdict.db output file>"
+    + "<JMdict input file> -o <output directory>"
 
 
 def main(argv):
     inputfile = ""
-    outputfile = ""
+    outputdir = ""
     date = ""
 
     try:
@@ -490,50 +629,21 @@ def main(argv):
             sys.exit()
         elif opt in ("-i", "--ifile"):
             inputfile = arg
-        elif opt in ("-o", "--ofile"):
-            outputfile = arg
+        elif opt in ("-o", "--odir"):
+            outputdir = arg
         elif opt in ("-d", "--date"):
             date = arg
 
-    if inputfile == "" or outputfile == "" or date == "":
+    if inputfile == "" or outputdir == "" or date == "":
         print(HELP_STRING)
         sys.exit(2)
 
-    conn = sqlite3.connect(outputfile, isolation_level=None)
-    cur = conn.cursor()
+    db = SumatoraDB(outputdir)
 
-    cur.execute("DROP TABLE IF EXISTS DictionaryEntry")
-    cur.execute("DROP TABLE IF EXISTS DictionaryTranslation")
-    cur.execute("DROP TABLE IF EXISTS DictionaryControl")
-    cur.execute("DROP TABLE IF EXISTS DictionaryIndex")
-    cur.execute("DROP TABLE IF EXISTS DictionaryEntity")
+    db.jmdictCreateTable()
+    db.jmdictBeginTransaction()
 
-    cur.execute("CREATE TABLE DictionaryEntry (seq INTEGER, "
-                + "readingsPrio TEXT, "
-                + "readingsPrioParts TEXT, readings TEXT, "
-                + "readingsParts TEXT, "
-                + "writingsPrio TEXT, writingsPrioParts TEXT, "
-                + "writings TEXT, "
-                + "writingsParts TEXT, pos TEXT, "
-                + "xref TEXT, ant TEXT, misc TEXT, "
-                + "lsource TEXT, dial TEXT, s_inf TEXT, "
-                + "field TEXT, PRIMARY KEY (seq))")
-    cur.execute("CREATE TABLE DictionaryTranslation (seq INTEGER, "
-                + "lang TEXT NOT NULL, "
-                + "gloss TEXT, PRIMARY KEY (seq, lang))")
-    cur.execute("CREATE TABLE DictionaryControl "
-                + "(control TEXT NOT NULL, value INTEGER, "
-                + "PRIMARY KEY (control))")
-    cur.execute("CREATE VIRTUAL TABLE DictionaryIndex "
-                + "USING fts4(content=\"DictionaryEntry\", "
-                + "readingsPrio, readingsPrioParts, readings, readingsParts, "
-                + "writingsPrio, writingsPrioParts, writings, writingsParts)")
-    cur.execute("CREATE TABLE DictionaryEntity "
-                + "(name TEXT NOT NULL, content TEXT, PRIMARY KEY (name))")
-
-    cur.execute("BEGIN TRANSACTION")
-
-    handler = JMDictHandler(cur)
+    handler = JMDictHandler(db)
 
     f = open(inputfile, "rb")
     parser = LibXml2Reader()
@@ -543,20 +653,14 @@ def main(argv):
 
     f.close()
 
-    cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)",
-                ("date", date))
-    cur.execute("INSERT INTO DictionaryControl (control, value) VALUES (?, ?)",
-                ("version", 3))
+    db.jmdictEndTransaction()
 
-    cur.execute("END TRANSACTION")
+    db.jmdictInsertControl(date, 3)
+    db.jmdictInsertEntities(handler.mDeclaredEntities)
 
-    for e in handler.mDeclaredEntities:
-        cur.execute("INSERT INTO DictionaryEntity "
-                    + "(name, content) VALUES (?, ?)",
-                    (e, handler.mDeclaredEntities[e]))
+    db.jmdictBuildIndex()
 
-    cur.execute("INSERT INTO DictionaryIndex "
-                + "(DictionaryIndex) VALUES ('rebuild')")
+    db.close()
 
 
 if __name__ == "__main__":
