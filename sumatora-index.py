@@ -35,6 +35,8 @@ import libxml2
 import json
 import os
 
+import romkan
+
 from xml.sax import xmlreader, saxutils, SAXParseException, SAXException
 
 
@@ -45,11 +47,19 @@ class SumatoraDBConnection(object):
 
     def createTable(self):
         self.cur.execute("DROP TABLE IF EXISTS DictionaryTranslation")
+        self.cur.execute("DROP TABLE IF EXISTS DictionaryTranslationIndex")
 
         self.cur.execute("CREATE TABLE DictionaryTranslation "
                          + "(seq INTEGER, "
                          + "lang TEXT NOT NULL, "
-                         + "gloss TEXT, PRIMARY KEY (seq, lang))")
+                         + "gloss TEXT, PRIMARY KEY (seq))")
+        self.cur.execute("CREATE VIRTUAL TABLE DictionaryTranslationIndex "
+                         + "USING fts4(content=\"DictionaryTranslation\", "
+                         + "gloss)")
+
+    def buildIndex(self):
+        self.cur.execute("INSERT INTO DictionaryTranslationIndex "
+                         + "(DictionaryTranslationIndex) VALUES ('rebuild')")
 
     def close(self):
         self.endTransaction()
@@ -80,6 +90,7 @@ class SumatoraDB(object):
         self.jmdictConn.close()
 
         for k in self.translationDBs:
+            self.translationDBs[k].buildIndex()
             self.translationDBs[k].close()
 
     def jmdictCreateTable(self):
@@ -405,11 +416,31 @@ class JMDictHandler():
             s |= self.calculatePartsElement(e)
         return self.serializeSet(s)
 
-    def calculatePartsElement(self, aString):
+    def calculatePartsElement(self, aString, aIncludeSelf=False):
         s = set()
-        for i in range(1, len(aString)):
+
+        start = 1
+
+        if aIncludeSelf:
+            start = 0
+
+        for i in range(start, len(aString)):
             s |= {aString[i:]}
+
         return s
+
+    def calculatePartsKana(self, aString):
+        s = set()
+
+        kana = romkan.to_katakana(romkan.to_roma(aString))
+
+        for e in aString.split(" "):
+            s |= self.calculatePartsElement(kana)
+
+        return self.serializeSet(s)
+
+    def toKana(self, aString):
+        return romkan.to_katakana(romkan.to_roma(aString))
 
     def insertTranslation(self):
         # try:
@@ -422,10 +453,10 @@ class JMDictHandler():
 
     def insertEntry(self):
         # try:
-        self.mDB.jmdictInsertEntry(self.mSeq, self.mReadingsPrio,
-                                   self.calculateParts(self.mReadingsPrio),
-                                   self.mReadings,
-                                   self.calculateParts(self.mReadings),
+        self.mDB.jmdictInsertEntry(self.mSeq, self.toKana(self.mReadingsPrio),
+                                   self.calculatePartsKana(self.mReadingsPrio),
+                                   self.toKana(self.mReadings),
+                                   self.calculatePartsKana(self.mReadings),
                                    self.mWritingsPrio,
                                    self.calculateParts(self.mWritingsPrio),
                                    self.mWritings,
