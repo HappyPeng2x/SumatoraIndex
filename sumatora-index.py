@@ -51,15 +51,10 @@ class SumatoraDBConnection(object):
 
         self.cur.execute("CREATE TABLE DictionaryTranslation "
                          + "(seq INTEGER, "
-                         + "lang TEXT NOT NULL, "
                          + "gloss TEXT, PRIMARY KEY (seq))")
         self.cur.execute("CREATE VIRTUAL TABLE DictionaryTranslationIndex "
-                         + "USING fts4(content=\"DictionaryTranslation\", "
+                         + "USING fts4(content=\"\", "
                          + "gloss)")
-
-    def buildIndex(self):
-        self.cur.execute("INSERT INTO DictionaryTranslationIndex "
-                         + "(DictionaryTranslationIndex) VALUES ('rebuild')")
 
     def close(self):
         self.endTransaction()
@@ -90,7 +85,6 @@ class SumatoraDB(object):
         self.jmdictConn.close()
 
         for k in self.translationDBs:
-            self.translationDBs[k].buildIndex()
             self.translationDBs[k].close()
 
     def jmdictCreateTable(self):
@@ -101,12 +95,10 @@ class SumatoraDB(object):
 
         self.jmdictCur.execute("CREATE TABLE DictionaryEntry (seq INTEGER, "
                                + "readingsPrio TEXT, "
-                               + "readingsPrioParts TEXT, "
                                + "readings TEXT, "
-                               + "readingsParts TEXT, "
-                               + "writingsPrio TEXT, writingsPrioParts TEXT, "
+                               + "writingsPrio TEXT, "
                                + "writings TEXT, "
-                               + "writingsParts TEXT, pos TEXT, "
+                               + "pos TEXT, "
                                + "xref TEXT, ant TEXT, misc TEXT, "
                                + "lsource TEXT, dial TEXT, s_inf TEXT, "
                                + "field TEXT, PRIMARY KEY (seq))")
@@ -114,9 +106,9 @@ class SumatoraDB(object):
                                + "(control TEXT NOT NULL, value INTEGER, "
                                + "PRIMARY KEY (control))")
         self.jmdictCur.execute("CREATE VIRTUAL TABLE DictionaryIndex "
-                               + "USING fts4(content=\"DictionaryEntry\", "
-                               + "readingsPrio, readingsPrioParts, "
-                               + "readings, readingsParts, "
+                               + "USING fts4(content=\"\", "
+                               + "readingsPrioKana, readingsPrioKanaParts, "
+                               + "readingsKana, readingsKanaParts, "
                                + "writingsPrio, writingsPrioParts, "
                                + "writings, writingsParts)")
         self.jmdictCur.execute("CREATE TABLE DictionaryEntity "
@@ -143,33 +135,34 @@ class SumatoraDB(object):
                                    + "(name, content) VALUES (?, ?)",
                                    (e, aEntities[e]))
 
-    def jmdictBuildIndex(self):
-        self.jmdictCur.execute("INSERT INTO DictionaryIndex "
-                               + "(DictionaryIndex) VALUES ('rebuild')")
-
-    def jmdictInsertEntry(self, aSeq, aReadingsPrio,
-                          aReadingsPrioParts, aReadings, aReadingsParts,
+    def jmdictInsertEntry(self, aSeq, aReadingsPrio, aReadingsPrioKana,
+                          aReadingsPrioKanaParts, aReadings, aReadingsKana, aReadingsKanaParts,
                           aWritingsPrio, aWritingsPrioParts,
                           aWritings, aWritingsParts, aPos, aXref, aAnt,
                           aMisc, aLSource, aDial, aSInf, aField):
-        self.jmdictCur.execute("INSERT INTO DictionaryEntry "
-                               + "(seq, readingsPrio, readingsPrioParts, "
-                               + "readings, readingsParts, "
+        self.jmdictCur.execute("INSERT INTO DictionaryIndex "
+                                + "(docid, readingsPrioKana, readingsPrioKanaParts, "
+                               + "readingsKana, readingsKanaParts, "
                                + "writingsPrio, writingsPrioParts, "
-                               + "writings, writingsParts, pos, "
+                               + "writings, writingsParts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               (aSeq, aReadingsPrioKana, aReadingsPrioKanaParts,
+                               aReadingsKana, aReadingsKanaParts, aWritingsPrio, aWritingsPrioParts,
+                               aWritings, aWritingsParts))
+        
+        self.jmdictCur.execute("INSERT INTO DictionaryEntry "
+                               + "(seq, readingsPrio, "
+                               + "readings, "
+                               + "writingsPrio, "
+                               + "writings, pos, "
                                + "xref, ant, misc, lsource, "
                                + "dial, s_inf, field) "
-                               + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+                               + "VALUES (?, ?, ?, ?, "
                                + "?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                (aSeq,
                                 aReadingsPrio,
-                                aReadingsPrioParts,
                                 aReadings,
-                                aReadingsParts,
                                 aWritingsPrio,
-                                aWritingsPrioParts,
                                 aWritings,
-                                aWritingsParts,
                                 aPos,
                                 aXref,
                                 aAnt,
@@ -190,14 +183,18 @@ class SumatoraDB(object):
             db.beginTransaction()
             self.translationDBs[aLang] = db
 
+        sense = json.dumps(aSenseArray,
+                        ensure_ascii=False)
+        
+        self.translationDBs[aLang].cur.execute(
+            "INSERT INTO DictionaryTranslationIndex (docid, gloss) VALUES (?, ?)",
+            (aSeq, sense))
+
         self.translationDBs[aLang].cur.execute(
             "INSERT INTO DictionaryTranslation "
-            + "(seq, lang, gloss) "
-            + "VALUES (?, ?, ?)",
-            (aSeq, aLang,
-             json.dumps(aSenseArray,
-                        ensure_ascii=False)))
-
+            + "(seq, gloss) "
+            + "VALUES (?, ?)",
+            (aSeq, sense))
 
 class Locator(xmlreader.Locator):
     """SAX Locator adapter for libxml2.xmlTextReaderLocator"""
@@ -453,9 +450,9 @@ class JMDictHandler():
 
     def insertEntry(self):
         # try:
-        self.mDB.jmdictInsertEntry(self.mSeq, self.toKana(self.mReadingsPrio),
+        self.mDB.jmdictInsertEntry(self.mSeq, self.mReadingsPrio, self.toKana(self.mReadingsPrio),
                                    self.calculatePartsKana(self.mReadingsPrio),
-                                   self.toKana(self.mReadings),
+                                   self.mReadings, self.toKana(self.mReadings),
                                    self.calculatePartsKana(self.mReadings),
                                    self.mWritingsPrio,
                                    self.calculateParts(self.mWritingsPrio),
@@ -688,8 +685,6 @@ def main(argv):
 
     db.jmdictInsertControl(date, 3)
     db.jmdictInsertEntities(handler.mDeclaredEntities)
-
-    db.jmdictBuildIndex()
 
     db.close()
 
