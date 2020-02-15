@@ -53,7 +53,7 @@ class SumatoraDBConnection(object):
                          + "(seq INTEGER, "
                          + "gloss TEXT, PRIMARY KEY (seq))")
         self.cur.execute("CREATE VIRTUAL TABLE DictionaryTranslationIndex "
-                         + "USING fts4(content=\"\", "
+                         + "USING fts4(content=\"DictionaryTranslation\", "
                          + "gloss)")
 
     def close(self):
