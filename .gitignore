@@ -2,3 +2,8 @@ jmdict
 __pycache__
 *.gz
 JMdict
+examples.utf
+\#*\#
+dictionaries.xml
+*~
+*.db
