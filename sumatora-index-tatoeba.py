@@ -92,7 +92,7 @@ def parse_examples(a_file, a_db, a_output_db):
                     r = cur.fetchall()
 
                     if len(r) > 0:
-                        output_cur.execute('INSERT OR IGNORE INTO Examples (id, sentence) VALUES (?, ?)', (exemple_id, line[:-1]))
+                        output_cur.execute('INSERT OR IGNORE INTO Examples (id, sentence) VALUES (?, ?)', (exemple_id, line[3:-1]))
 
                     if len(r) > 1:
                         print("Ambiguous: " + m['writing'] + " in " + contents, file=sys.stderr)

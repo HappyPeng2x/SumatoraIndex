@@ -121,14 +121,6 @@ class SumatoraDB(object):
     def jmdictEndTransaction(self):
         self.jmdictCur.execute("END TRANSACTION")
 
-    def jmdictInsertControl(self, aDate, aVersion):
-        self.jmdictCur.execute("INSERT INTO DictionaryControl "
-                               + "(control, value) VALUES (?, ?)",
-                               ("date", aDate))
-        self.jmdictCur.execute("INSERT INTO DictionaryControl "
-                               + "(control, value) VALUES (?, ?)",
-                               ("version", aVersion))
-
     def jmdictInsertEntities(self, aEntities):
         for e in aEntities:
             self.jmdictCur.execute("INSERT INTO DictionaryEntity "
@@ -635,18 +627,17 @@ class JMDictHandler():
         self.mDeclaredEntities[name] = content
 
 
-HELP_STRING = "usage: sumatora-index.py -d <date> -i " \
+HELP_STRING = "usage: sumatora-index.py -i " \
     + "<JMdict input file> -o <output directory>"
 
 
 def main(argv):
     inputfile = ""
     outputdir = ""
-    date = ""
 
     try:
-        opts, args = getopt.getopt(argv, "hi:o:d:",
-                                   ["ifile=", "odir=", "date="])
+        opts, args = getopt.getopt(argv, "hi:o:",
+                                   ["ifile=", "odir="])
     except getopt.GetoptError:
         print(HELP_STRING)
         sys.exit(2)
@@ -659,10 +650,8 @@ def main(argv):
             inputfile = arg
         elif opt in ("-o", "--odir"):
             outputdir = arg
-        elif opt in ("-d", "--date"):
-            date = arg
 
-    if inputfile == "" or outputdir == "" or date == "":
+    if inputfile == "" or outputdir == "":
         print(HELP_STRING)
         sys.exit(2)
 
@@ -683,7 +672,6 @@ def main(argv):
 
     db.jmdictEndTransaction()
 
-    db.jmdictInsertControl(date, 3)
     db.jmdictInsertEntities(handler.mDeclaredEntities)
 
     db.close()
