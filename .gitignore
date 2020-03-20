@@ -7,3 +7,4 @@ examples.utf
 dictionaries.xml
 *~
 *.db
+drv_libxml2_new.py
