@@ -54,7 +54,7 @@ class SumatoraDBConnection(object):
 
         self.cur.execute("CREATE TABLE DictionaryTranslation "
                          + "(seq INTEGER, gloss_id INTEGER, gloss_list_id INTEGER, "
-                         + "gloss TEXT, PRIMARY KEY (seq, gloss_id, gloss_list_id))")
+                         + "gloss TEXT, PRIMARY KEY (seq, gloss_id))")
         self.cur.execute("CREATE VIRTUAL TABLE DictionaryTranslationIndex "
                          + "USING fts4(content=\"DictionaryTranslation\", "
                          + "gloss)")
@@ -176,16 +176,11 @@ class SumatoraDB(object):
         i = 0
 
         for sense in aSenseArray:
-            j = 0
-
-            for gloss in sense:
-                self.translationDBs[aLang].cur.execute(
-                    "INSERT INTO DictionaryTranslation "
-                    + "(seq, gloss_id, gloss_list_id, gloss) "
-                    + "VALUES (?, ?, ?, ?)",
-                    (aSeq, i, j, gloss))
-                
-                j = j + 1
+            self.translationDBs[aLang].cur.execute(
+                "INSERT INTO DictionaryTranslation "
+                + "(seq, gloss_id, gloss) "
+                + "VALUES (?, ?, ?)",
+                (aSeq, i, ', '.join(sense)))
 
             i = i + 1
 
