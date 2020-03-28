@@ -39,7 +39,8 @@ SQL_QUERY_EXACT_WRITING_PRIO = """SELECT DictionaryEntry.seq,
         DictionaryEntry.seq IN 
             (SELECT DictionaryIndex.`rowid` AS seq
                 FROM DictionaryIndex
-                WHERE writingsPrio MATCH ?)"""
+                WHERE writingsPrio MATCH ?)
+    GROUP BY DictionaryEntry.seq"""
 
 def test_query(a_dir, a_lang, a_expr):
     conn = sqlite3.connect(os.path.join(a_dir, 'jmdict.db'))
