@@ -32,10 +32,11 @@ SQL_QUERY_EXACT_WRITING_PRIO = """SELECT DictionaryEntry.seq,
         DictionaryEntry.dial,
         DictionaryEntry.s_inf,
         DictionaryEntry.field,
-        DictionaryTranslation.gloss
+        json_group_object(TranslationSelect.gloss_id, TranslationSelect.glosses)
     FROM DictionaryEntry,
-        %s.DictionaryTranslation
-    WHERE DictionaryEntry.seq = DictionaryTranslation.seq AND
+        (SELECT DictionaryTranslation.seq, DictionaryTranslation.gloss_id, group_concat(gloss, ", ") AS glosses FROM %s.DictionaryTranslation GROUP BY DictionaryTranslation.seq, DictionaryTranslation.gloss_id) AS TranslationSelect
+    WHERE
+        TranslationSelect.seq = DictionaryEntry.seq AND
         DictionaryEntry.seq IN 
             (SELECT DictionaryIndex.`rowid` AS seq
                 FROM DictionaryIndex
@@ -47,6 +48,17 @@ def test_query(a_dir, a_lang, a_expr):
 
     cur.execute("ATTACH '" + os.path.join(a_dir, a_lang + '.db') + "' AS " + a_lang)
 
+    print("Query plan:")
+
+    cur.execute("EXPLAIN QUERY PLAN " + SQL_QUERY_EXACT_WRITING_PRIO % a_lang, (a_expr,))
+
+    results = cur.fetchall()
+
+    for result in results:
+        print(result)
+
+    print("Query results:")
+    
     cur.execute(SQL_QUERY_EXACT_WRITING_PRIO % a_lang, (a_expr,))
 
     results = cur.fetchall()

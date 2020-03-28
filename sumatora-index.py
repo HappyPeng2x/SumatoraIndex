@@ -45,27 +45,24 @@ class SumatoraDBConnection(object):
         self.conn = aConn
         self.cur = self.conn.cursor()
 
+        self.cur.execute('PRAGMA journal_mode=WAL')
+        self.cur.execute('BEGIN TRANSACTION')
+
     def createTable(self):
         self.cur.execute("DROP TABLE IF EXISTS DictionaryTranslation")
         self.cur.execute("DROP TABLE IF EXISTS DictionaryTranslationIndex")
 
         self.cur.execute("CREATE TABLE DictionaryTranslation "
-                         + "(seq INTEGER, "
-                         + "gloss TEXT, PRIMARY KEY (seq))")
+                         + "(seq INTEGER, gloss_id INTEGER, gloss_list_id INTEGER, "
+                         + "gloss TEXT, PRIMARY KEY (seq, gloss_id, gloss_list_id))")
         self.cur.execute("CREATE VIRTUAL TABLE DictionaryTranslationIndex "
                          + "USING fts4(content=\"DictionaryTranslation\", "
                          + "gloss)")
 
     def close(self):
-        self.endTransaction()
+        self.cur.execute('COMMIT')
+
         self.conn.close()
-
-    def beginTransaction(self):
-        self.cur.execute("BEGIN TRANSACTION")
-
-    def endTransaction(self):
-        self.cur.execute("END TRANSACTION")
-
 
 class SumatoraDB(object):
     def __init__(self, aFolder):
@@ -79,12 +76,20 @@ class SumatoraDB(object):
                                           isolation_level=None)
         self.jmdictCur = self.jmdictConn.cursor()
 
+        self.jmdictCur.execute('PRAGMA journal_mode=WAL')
+        self.jmdictCur.execute('BEGIN TRANSACTION')
+
         self.translationDBs = {}
 
     def close(self):
+        self.jmdictCur.execute('COMMIT')
+
         self.jmdictConn.close()
 
         for k in self.translationDBs:
+            self.translationDBs[k].cur.execute(
+                "INSERT INTO DictionaryTranslationIndex (docid, gloss) SELECT rowid, gloss FROM DictionaryTranslation")
+
             self.translationDBs[k].close()
 
     def jmdictCreateTable(self):
@@ -114,12 +119,6 @@ class SumatoraDB(object):
         self.jmdictCur.execute("CREATE TABLE DictionaryEntity "
                                + "(name TEXT NOT NULL, content TEXT, "
                                + "PRIMARY KEY (name))")
-
-    def jmdictBeginTransaction(self):
-        self.jmdictCur.execute("BEGIN TRANSACTION")
-
-    def jmdictEndTransaction(self):
-        self.jmdictCur.execute("END TRANSACTION")
 
     def jmdictInsertEntities(self, aEntities):
         for e in aEntities:
@@ -172,21 +171,23 @@ class SumatoraDB(object):
 
             db = SumatoraDBConnection(conn)
             db.createTable()
-            db.beginTransaction()
             self.translationDBs[aLang] = db
 
-        sense = json.dumps(aSenseArray,
-                        ensure_ascii=False)
-        
-        self.translationDBs[aLang].cur.execute(
-            "INSERT INTO DictionaryTranslationIndex (docid, gloss) VALUES (?, ?)",
-            (aSeq, sense))
+        i = 0
 
-        self.translationDBs[aLang].cur.execute(
-            "INSERT INTO DictionaryTranslation "
-            + "(seq, gloss) "
-            + "VALUES (?, ?)",
-            (aSeq, sense))
+        for sense in aSenseArray:
+            j = 0
+
+            for gloss in sense:
+                self.translationDBs[aLang].cur.execute(
+                    "INSERT INTO DictionaryTranslation "
+                    + "(seq, gloss_id, gloss_list_id, gloss) "
+                    + "VALUES (?, ?, ?, ?)",
+                    (aSeq, i, j, gloss))
+                
+                j = j + 1
+
+            i = i + 1
 
 class Locator(xmlreader.Locator):
     """SAX Locator adapter for libxml2.xmlTextReaderLocator"""
@@ -658,7 +659,6 @@ def main(argv):
     db = SumatoraDB(outputdir)
 
     db.jmdictCreateTable()
-    db.jmdictBeginTransaction()
 
     handler = JMDictHandler(db)
 
@@ -669,8 +669,6 @@ def main(argv):
     parser.parse(f)
 
     f.close()
-
-    db.jmdictEndTransaction()
 
     db.jmdictInsertEntities(handler.mDeclaredEntities)
 
