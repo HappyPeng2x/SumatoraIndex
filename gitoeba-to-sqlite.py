@@ -43,6 +43,30 @@ import os
 import sqlite3
 import sys
 
+# ISO 639-3 (Tatoeba) → ISO 639-2/B (JMdict bibliographic codes).
+# Only languages where the two standards differ are listed; others pass through.
+_LANG_MAP = {
+    'sqi': 'alb',  # Albanian
+    'hye': 'arm',  # Armenian
+    'eus': 'baq',  # Basque
+    'mya': 'bur',  # Burmese
+    'zho': 'chi',  # Chinese
+    'ces': 'cze',  # Czech
+    'cym': 'wel',  # Welsh
+    'deu': 'ger',  # German
+    'ell': 'gre',  # Modern Greek
+    'fas': 'per',  # Persian
+    'fra': 'fre',  # French
+    'isl': 'ice',  # Icelandic
+    'kat': 'geo',  # Georgian
+    'mkd': 'mac',  # Macedonian
+    'msa': 'may',  # Malay
+    'nld': 'dut',  # Dutch
+    'ron': 'rum',  # Romanian
+    'slk': 'slo',  # Slovak
+    'bod': 'tib',  # Tibetan
+}
+
 
 # ---------------------------------------------------------------------------
 # Kana normalisation (hiragana → katakana for FTS5 kana column lookups)
@@ -199,7 +223,8 @@ def process(gitoeba_dir, jmdict_path, output_dir):
         sentence_id = sent['id']
         jpn_text = sent['text']
 
-        for lang, translation in translations.items():
+        for tatoeba_lang, translation in translations.items():
+            lang = _LANG_MAP.get(tatoeba_lang, tatoeba_lang)
             if lang not in lang_dbs:
                 conn, cur = _open_lang_db(lang, output_dir)
                 lang_dbs[lang] = (conn, cur, 0)

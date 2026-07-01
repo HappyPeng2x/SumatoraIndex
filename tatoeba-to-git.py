@@ -35,6 +35,30 @@ import urllib.request
 
 BASE_URL = 'https://downloads.tatoeba.org/exports'
 SHARD_SIZE = 10000
+
+# ISO 639-3 (Tatoeba) → ISO 639-2/B (JMdict bibliographic codes).
+# Only languages where the two standards differ are listed; others pass through.
+_LANG_MAP = {
+    'sqi': 'alb',  # Albanian
+    'hye': 'arm',  # Armenian
+    'eus': 'baq',  # Basque
+    'mya': 'bur',  # Burmese
+    'zho': 'chi',  # Chinese
+    'ces': 'cze',  # Czech
+    'cym': 'wel',  # Welsh
+    'deu': 'ger',  # German
+    'ell': 'gre',  # Modern Greek
+    'fas': 'per',  # Persian
+    'fra': 'fre',  # French
+    'isl': 'ice',  # Icelandic
+    'kat': 'geo',  # Georgian
+    'mkd': 'mac',  # Macedonian
+    'msa': 'may',  # Malay
+    'nld': 'dut',  # Dutch
+    'ron': 'rum',  # Romanian
+    'slk': 'slo',  # Slovak
+    'bod': 'tib',  # Tibetan
+}
 # Skip per-language files smaller than this; they contain only a header or
 # are effectively empty (the smallest real link file is ~47 bytes).
 MIN_FILE_BYTES = 200
@@ -239,17 +263,19 @@ def process(output_dir, cache_dir):
     langs = list_available_langs(cache_dir)
     print(f'  {len(langs)} language link files found', flush=True)
 
-    # translations[jpn_id][lang] = translation_text (first found per lang)
+    # translations[jpn_id][jm_lang] = translation_text (first found per lang)
     translations = {}
-    for i, lang in enumerate(langs, 1):
-        lang_trans = process_lang(lang, cache_dir, indexed_ids)
+    for i, tatoeba_lang in enumerate(langs, 1):
+        lang_trans = process_lang(tatoeba_lang, cache_dir, indexed_ids)
         n = len(lang_trans)
+        jm_lang = _LANG_MAP.get(tatoeba_lang, tatoeba_lang)
         if n:
             for jpn_id, text in lang_trans.items():
                 if jpn_id not in translations:
                     translations[jpn_id] = {}
-                translations[jpn_id][lang] = text
-        print(f'  [{i:3d}/{len(langs)}] {lang}: {n} links', flush=True)
+                translations[jpn_id][jm_lang] = text
+        label = f'{tatoeba_lang}→{jm_lang}' if jm_lang != tatoeba_lang else tatoeba_lang
+        print(f'  [{i:3d}/{len(langs)}] {label}: {n} links', flush=True)
 
     # Step 4: Write sentence JSON files
     written = skipped = 0
