@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Parse JMdict XML into a git repo with one JSON file per entry and language.
+"""Download JMdict and write a gitmdict JSON git repository.
+
+Downloads JMdict.gz from the EDRDG server, caches it locally, then parses
+the XML into one JSON file per entry and per language, mirroring the layout
+of the gitmdict repository.
+
+Downloaded files are cached in the cache directory; delete the cache to
+force a re-download.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -12,37 +19,68 @@ __license__ = "GPLv3"
 __version__ = "0.1.0"
 
 import getopt
+import gzip
 import json
 import os
 import re
 import sys
+import urllib.request
 
 from lxml import etree
 
+JMDICT_URL = 'http://ftp.edrdg.org/pub/Nihongo/JMdict.gz'
 NS_XML = '{http://www.w3.org/XML/1998/namespace}'
 ENTITY_RE = re.compile(r'<!ENTITY\s+([\w\-\.]+)\s+"([^"]+)"')
 SHARD_SIZE = 10000
 
 
+# ---------------------------------------------------------------------------
+# Download helpers
+# ---------------------------------------------------------------------------
+
+def _download(url, dest):
+    print(f'  Downloading {url} …', flush=True)
+    urllib.request.urlretrieve(url, dest)
+
+
+def ensure_cached(url, cache_dir):
+    """Return local path to the cached file, downloading if absent."""
+    os.makedirs(cache_dir, exist_ok=True)
+    name = url.split('/')[-1]
+    path = os.path.join(cache_dir, name)
+    if not os.path.exists(path):
+        _download(url, path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Gzip-transparent helpers
+# ---------------------------------------------------------------------------
+
+def _open_text(path):
+    if path.endswith('.gz'):
+        return gzip.open(path, 'rt', encoding='utf-8')
+    return open(path, 'r', encoding='utf-8')
+
+
+def _open_binary(path):
+    if path.endswith('.gz'):
+        return gzip.open(path, 'rb')
+    return open(path, 'rb')
+
+
+# ---------------------------------------------------------------------------
+# XML parsing
+# ---------------------------------------------------------------------------
+
 def extract_entities(path):
-    """Read just the DOCTYPE block and extract entity name→description pairs."""
-    with open(path, 'r', encoding='utf-8') as f:
+    """Read the DOCTYPE block and extract entity name → description pairs."""
+    with _open_text(path) as f:
         header = f.read(30000)
     end = header.find(']>')
     if end == -1:
         end = len(header)
     return {m.group(1): m.group(2) for m in ENTITY_RE.finditer(header[:end + 2])}
-
-
-def shard(seq):
-    return seq // SHARD_SIZE
-
-
-def write_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
-        f.write('\n')
 
 
 def get_entity_names(parent, tag):
@@ -83,11 +121,9 @@ def parse_entry(elem):
             'appliesToKanji': restr if restr else ['*'],
         })
 
-    # Group senses by language. Language is determined by the xml:lang
-    # attribute on the first <pos> or <gloss> child of each <sense>.
-    lang_glosses = {}   # lang -> [[gloss, ...], ...]  (list of senses)
+    lang_glosses = {}
     lang_order = []
-    eng_senses = []     # structural metadata, English senses only
+    eng_senses = []
 
     for s in elem.findall('sense'):
         sense_lang = 'eng'
@@ -128,13 +164,32 @@ def parse_entry(elem):
     return seq, kanji, kana, eng_senses, lang_glosses
 
 
-def process(input_file, output_dir):
-    entities = extract_entities(input_file)
-    print(f'Extracted {len(entities)} entity declarations', flush=True)
+# ---------------------------------------------------------------------------
+# JSON output
+# ---------------------------------------------------------------------------
 
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+        f.write('\n')
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
+
+def process(output_dir, cache_dir):
+    jmdict_path = ensure_cached(JMDICT_URL, cache_dir)
+    print(f'  Using {jmdict_path}', flush=True)
+
+    entities = extract_entities(jmdict_path)
+    print(f'  {len(entities)} entity declarations extracted', flush=True)
+
+    os.makedirs(output_dir, exist_ok=True)
     entry_count = 0
 
-    with open(input_file, 'rb') as f:
+    with _open_binary(jmdict_path) as f:
         for event, elem in etree.iterparse(
             f, tag='entry',
             load_dtd=True, resolve_entities=False, no_network=True,
@@ -144,19 +199,11 @@ def process(input_file, output_dir):
             while elem.getprevious() is not None:
                 del elem.getparent()[0]
 
-            sh = shard(seq)
-
-            entry_data = {
-                'seq': seq,
-                'kanji': kanji,
-                'kana': kana,
-                'senses': eng_senses,
-            }
+            sh = seq // SHARD_SIZE
             write_json(
                 os.path.join(output_dir, 'entries', str(sh), f'{seq}.json'),
-                entry_data,
+                {'seq': seq, 'kanji': kanji, 'kana': kana, 'senses': eng_senses},
             )
-
             for lang, glosses in lang_glosses.items():
                 write_json(
                     os.path.join(output_dir, 'translations', lang,
@@ -172,18 +219,20 @@ def process(input_file, output_dir):
         os.path.join(output_dir, 'metadata.json'),
         {'entities': entities},
     )
-
     print(f'Done: {entry_count} entries written to {output_dir}', flush=True)
 
 
-HELP = 'usage: xml-to-git.py -i <JMdict input file> -o <output git directory>'
+HELP = (
+    'usage: jmdict-to-git.py '
+    '-o <gitmdict directory> [--cache <cache directory>]'
+)
 
 
 def main(argv):
-    input_file = ''
     output_dir = ''
+    cache_dir = os.path.expanduser('~/.cache/jmdict')
     try:
-        opts, _ = getopt.getopt(argv, 'hi:o:', ['ifile=', 'odir='])
+        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -191,14 +240,14 @@ def main(argv):
         if opt == '-h':
             print(HELP)
             sys.exit()
-        elif opt in ('-i', '--ifile'):
-            input_file = arg
         elif opt in ('-o', '--odir'):
             output_dir = arg
-    if not input_file or not output_dir:
+        elif opt == '--cache':
+            cache_dir = arg
+    if not output_dir:
         print(HELP)
         sys.exit(2)
-    process(input_file, output_dir)
+    process(output_dir, cache_dir)
 
 
 if __name__ == '__main__':
