@@ -96,11 +96,12 @@ class SumatoraDB:
         )
         c.execute(
             'CREATE VIRTUAL TABLE DictionaryIndex '
-            'USING fts4(content="", '
+            'USING fts5('
             'readingsPrioKana, readingsPrioKanaParts, '
             'readingsKana, readingsKanaParts, '
             'writingsPrio, writingsPrioParts, '
-            'writings, writingsParts)'
+            'writings, writingsParts, '
+            'content="")'
         )
         c.execute(
             'CREATE TABLE DictionaryEntity '
@@ -120,7 +121,7 @@ class SumatoraDB:
         r_kata = to_kana(readings)
         self._jmcur.execute(
             'INSERT INTO DictionaryIndex '
-            '(docid, readingsPrioKana, readingsPrioKanaParts, '
+            '(rowid, readingsPrioKana, readingsPrioKanaParts, '
             'readingsKana, readingsKanaParts, '
             'writingsPrio, writingsPrioParts, writings, writingsParts) '
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -154,12 +155,12 @@ class SumatoraDB:
         cur.execute('DROP TABLE IF EXISTS DictionaryTranslationIndex')
         cur.execute(
             'CREATE TABLE DictionaryTranslation '
-            '(seq INTEGER, gloss_id INTEGER, gloss_list_id INTEGER, '
+            '(seq INTEGER, gloss_id INTEGER, '
             'gloss TEXT, PRIMARY KEY (seq, gloss_id))'
         )
         cur.execute(
             'CREATE VIRTUAL TABLE DictionaryTranslationIndex '
-            'USING fts4(content="DictionaryTranslation", gloss)'
+            'USING fts5(gloss, content="DictionaryTranslation")'
         )
         self._trans[lang] = (conn, cur)
 
@@ -181,8 +182,7 @@ class SumatoraDB:
 
         for lang, (conn, cur) in self._trans.items():
             cur.execute(
-                'INSERT INTO DictionaryTranslationIndex (docid, gloss) '
-                'SELECT rowid, gloss FROM DictionaryTranslation'
+                "INSERT INTO DictionaryTranslationIndex(DictionaryTranslationIndex) VALUES('rebuild')"
             )
             cur.execute('COMMIT')
             conn.close()
