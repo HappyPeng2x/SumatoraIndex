@@ -80,6 +80,40 @@ def hira_to_kata(s):
 
 
 # ---------------------------------------------------------------------------
+# Furigana markup
+# ---------------------------------------------------------------------------
+
+def _has_kanji(s):
+    return any('一' <= c <= '鿿' or '㐀' <= c <= '䶿' for c in s)
+
+
+def markup_sentence(text, indices):
+    """Return text with {expression;reading} furigana spans inserted.
+
+    Only tokens whose expression contains at least one kanji are marked —
+    pure-kana expressions need no furigana. Tokens are applied left-to-right;
+    if an expression is not found in the remaining text it is silently skipped.
+    """
+    remaining = text
+    parts = []
+    for tok in indices:
+        reading = tok.get('reading')
+        if not reading:
+            continue
+        expression = tok.get('expression') or tok['writing']
+        if not _has_kanji(expression):
+            continue
+        idx = remaining.find(expression)
+        if idx == -1:
+            continue
+        parts.append(remaining[:idx])
+        parts.append(f'{{{expression};{reading}}}')
+        remaining = remaining[idx + len(expression):]
+    parts.append(remaining)
+    return ''.join(parts)
+
+
+# ---------------------------------------------------------------------------
 # JMdict seq resolver
 # ---------------------------------------------------------------------------
 
@@ -206,11 +240,12 @@ def process(gitoeba_dir, jmdict_path, output_dir):
         sentences[sent['id']] = (sent['text'], sent.get('indices', []))
     print(f'  {len(sentences)} sentences loaded', flush=True)
 
-    # Precompute seq sets per sentence (shared across all languages)
+    # Precompute seq sets and furigana-marked sentence text per sentence
     print('Resolving tokens…', flush=True)
-    seq_cache = {}   # sentence_id → frozenset of JMdict seqs
+    seq_cache = {}     # sentence_id → frozenset of JMdict seqs
+    marked_cache = {}  # sentence_id → furigana-marked sentence text
     ambiguous = 0
-    for sent_id, (_, indices) in sentences.items():
+    for sent_id, (text, indices) in sentences.items():
         seqs = set()
         for tok in indices:
             resolved = resolver.resolve(tok['writing'], tok.get('reading'))
@@ -219,6 +254,7 @@ def process(gitoeba_dir, jmdict_path, output_dir):
             seqs.update(resolved)
         if seqs:
             seq_cache[sent_id] = frozenset(seqs)
+            marked_cache[sent_id] = markup_sentence(text, indices)
     resolver.close()
     print(f'  {len(seq_cache)} sentences have at least one resolved token', flush=True)
     if ambiguous:
@@ -246,7 +282,7 @@ def process(gitoeba_dir, jmdict_path, output_dir):
             seqs = seq_cache.get(sent_id)
             if not seqs:
                 continue
-            jpn_text = sentences[sent_id][0]
+            jpn_text = marked_cache[sent_id]
             translation = t['translation']
             for seq in seqs:
                 cur.execute(

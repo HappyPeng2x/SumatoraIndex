@@ -68,11 +68,12 @@ MIN_FILE_BYTES = 200
 #   writing(reading)[index]{expression}~
 # Only tokens with a trailing ~ are verified JMdict matches.
 # The [index] field is a sequential counter, NOT a JMdict seq number.
+# expression is the surface form in the sentence (differs from writing for inflections).
 TOKEN_RE = re.compile(
     r'(?P<writing>[^\(\)\[\]\{\}\s]+)'
     r'(\((?P<reading>[^\(\)\[\]\{\}\s]*)\))?'
     r'(\[[^\(\)\[\]\{\}\s]*\])?'
-    r'(\{[^\(\)\[\]\{\}\s]*\})?'
+    r'(\{(?P<expression>[^\(\)\[\]\{\}\s]*)\})?'
     r'(?P<verified>~)?'
     r'\s?'
 )
@@ -167,18 +168,33 @@ def parse_jpn_indices(cache_dir):
             seen = set()
             for m in TOKEN_RE.finditer(parts[2]):
                 if m['verified'] == '~' and m['writing']:
-                    tok = (m['writing'], m['reading'] or None)
-                    if tok not in seen:
-                        seen.add(tok)
+                    writing = m['writing']
+                    reading = m['reading'] or None
+                    expression = m['expression'] or None
+                    # expression equal to writing carries no extra info
+                    if expression == writing:
+                        expression = None
+                    key = (writing, reading, expression)
+                    if key not in seen:
+                        seen.add(key)
+                        tok = {'writing': writing}
+                        if reading:
+                            tok['reading'] = reading
+                        if expression:
+                            tok['expression'] = expression
                         tokens.append(tok)
             if tokens:
                 if sentence_id not in result:
                     result[sentence_id] = tokens
                 else:
                     # merge tokens from multiple B-lines for the same sentence
-                    existing = set(result[sentence_id])
+                    existing = {
+                        (t['writing'], t.get('reading'), t.get('expression'))
+                        for t in result[sentence_id]
+                    }
                     result[sentence_id].extend(
-                        t for t in tokens if t not in existing
+                        t for t in tokens
+                        if (t['writing'], t.get('reading'), t.get('expression')) not in existing
                     )
     return result
 
@@ -290,14 +306,7 @@ def process(output_dir, cache_dir):
         shard = jpn_id // SHARD_SIZE
         write_json(
             os.path.join(output_dir, 'sentences', str(shard), f'{jpn_id}.json'),
-            {
-                'id': jpn_id,
-                'text': text,
-                'indices': [
-                    {'writing': w, 'reading': r} if r else {'writing': w}
-                    for w, r in tokens
-                ],
-            },
+            {'id': jpn_id, 'text': text, 'indices': tokens},
         )
         for lang, translation in trans.items():
             write_json(
