@@ -70,7 +70,7 @@ class SumatoraDB:
             os.path.join(folder, 'jmdict.db'), isolation_level=None,
         )
         self._jmcur = self._jmconn.cursor()
-        self._jmcur.execute('PRAGMA journal_mode=WAL')
+        self._jmcur.execute('PRAGMA journal_mode=DELETE')
         self._jmcur.execute('BEGIN TRANSACTION')
 
         self._trans = {}   # lang -> (conn, cur)
@@ -149,7 +149,7 @@ class SumatoraDB:
             os.path.join(self.folder, f'{lang}.db'), isolation_level=None,
         )
         cur = conn.cursor()
-        cur.execute('PRAGMA journal_mode=WAL')
+        cur.execute('PRAGMA journal_mode=DELETE')
         cur.execute('BEGIN TRANSACTION')
         cur.execute('DROP TABLE IF EXISTS DictionaryTranslation')
         cur.execute('DROP TABLE IF EXISTS DictionaryTranslationIndex')
@@ -178,6 +178,7 @@ class SumatoraDB:
 
     def close(self):
         self._jmcur.execute('COMMIT')
+        self._jmconn.execute('VACUUM')
         self._jmconn.close()
 
         for lang, (conn, cur) in self._trans.items():
@@ -185,6 +186,7 @@ class SumatoraDB:
                 "INSERT INTO DictionaryTranslationIndex(DictionaryTranslationIndex) VALUES('rebuild')"
             )
             cur.execute('COMMIT')
+            conn.execute('VACUUM')
             conn.close()
 
 
