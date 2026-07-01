@@ -131,7 +131,7 @@ CREATE VIEW ExamplesSummary AS
 
 
 def _open_lang_db(lang, output_dir):
-    path = os.path.join(output_dir, f'{lang}.db')
+    path = os.path.join(output_dir, f'examples_{lang}.db')
     conn = sqlite3.connect(path, isolation_level=None)
     c = conn.cursor()
     c.execute('PRAGMA journal_mode=DELETE')
@@ -228,7 +228,7 @@ def process(gitoeba_dir, jmdict_path, output_dir):
 
     for lang, (conn, cur, n) in sorted(lang_dbs.items()):
         _finish_lang_db(conn, cur)
-        print(f'  {lang}.db  ({n} sentences)', flush=True)
+        print(f'  examples_{lang}.db  ({n} sentences)', flush=True)
 
     print('Done.', flush=True)
 
