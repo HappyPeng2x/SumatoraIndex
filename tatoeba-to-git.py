@@ -277,8 +277,9 @@ def process(output_dir, cache_dir):
         label = f'{tatoeba_lang}→{jm_lang}' if jm_lang != tatoeba_lang else tatoeba_lang
         print(f'  [{i:3d}/{len(langs)}] {label}: {n} links', flush=True)
 
-    # Step 4: Write sentence JSON files
+    # Step 4: Write sentence and translation JSON files
     written = skipped = 0
+    trans_written = 0
     for jpn_id, tokens in jpn_indices.items():
         text = jpn_sentences.get(jpn_id)
         trans = translations.get(jpn_id)
@@ -287,19 +288,23 @@ def process(output_dir, cache_dir):
             continue
 
         shard = jpn_id // SHARD_SIZE
-        data = {
-            'id': jpn_id,
-            'text': text,
-            'indices': [
-                {'writing': w, 'reading': r} if r else {'writing': w}
-                for w, r in tokens
-            ],
-            'translations': trans,
-        }
         write_json(
             os.path.join(output_dir, 'sentences', str(shard), f'{jpn_id}.json'),
-            data,
+            {
+                'id': jpn_id,
+                'text': text,
+                'indices': [
+                    {'writing': w, 'reading': r} if r else {'writing': w}
+                    for w, r in tokens
+                ],
+            },
         )
+        for lang, translation in trans.items():
+            write_json(
+                os.path.join(output_dir, 'translations', lang, str(shard), f'{jpn_id}.json'),
+                {'id': jpn_id, 'lang': lang, 'translation': translation},
+            )
+            trans_written += 1
         written += 1
         if written % 10000 == 0:
             print(f'  {written} sentences written…', flush=True)
@@ -315,7 +320,7 @@ def process(output_dir, cache_dir):
     )
 
     print(
-        f'Done: {written} sentences written, {skipped} skipped '
+        f'Done: {written} sentences, {trans_written} translation files, {skipped} skipped '
         f'({len(active_langs)} languages)',
         flush=True,
     )

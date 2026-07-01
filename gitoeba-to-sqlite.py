@@ -194,56 +194,33 @@ def process(gitoeba_dir, jmdict_path, output_dir):
 
     resolver = TokenResolver(jmdict_path)
 
-    # lang → (conn, cur, row_count)
-    lang_dbs = {}
-
     sentences_dir = os.path.join(gitoeba_dir, 'sentences')
-    sent_count = 0
-    ambiguous = 0
+    translations_dir = os.path.join(gitoeba_dir, 'translations')
 
+    # Load all sentences into memory: id → (text, indices)
+    print('Loading sentences…', flush=True)
+    sentences = {}
     for path in iter_json_files(sentences_dir):
         with open(path, encoding='utf-8') as f:
             sent = json.load(f)
+        sentences[sent['id']] = (sent['text'], sent.get('indices', []))
+    print(f'  {len(sentences)} sentences loaded', flush=True)
 
-        translations = sent.get('translations', {})
-        if not translations:
-            continue
-
-        # Resolve all verified tokens → JMdict seq numbers
+    # Precompute seq sets per sentence (shared across all languages)
+    print('Resolving tokens…', flush=True)
+    seq_cache = {}   # sentence_id → frozenset of JMdict seqs
+    ambiguous = 0
+    for sent_id, (_, indices) in sentences.items():
         seqs = set()
-        for tok in sent.get('indices', []):
+        for tok in indices:
             resolved = resolver.resolve(tok['writing'], tok.get('reading'))
             if len(resolved) > 1:
                 ambiguous += 1
             seqs.update(resolved)
-
-        if not seqs:
-            continue
-
-        sentence_id = sent['id']
-        jpn_text = sent['text']
-
-        for tatoeba_lang, translation in translations.items():
-            lang = _LANG_MAP.get(tatoeba_lang, tatoeba_lang)
-            if lang not in lang_dbs:
-                conn, cur = _open_lang_db(lang, output_dir)
-                lang_dbs[lang] = (conn, cur, 0)
-            conn, cur, n = lang_dbs[lang]
-            for seq in seqs:
-                cur.execute(
-                    'INSERT OR IGNORE INTO ExamplePairs '
-                    '(seq, sentence_id, sentence, translation) VALUES (?, ?, ?, ?)',
-                    (seq, sentence_id, jpn_text, translation),
-                )
-            lang_dbs[lang] = (conn, cur, n + 1)
-
-        sent_count += 1
-        if sent_count % 10000 == 0:
-            print(f'  {sent_count} sentences processed…', flush=True)
-
+        if seqs:
+            seq_cache[sent_id] = frozenset(seqs)
     resolver.close()
-
-    print(f'Processed {sent_count} sentences → {len(lang_dbs)} language databases')
+    print(f'  {len(seq_cache)} sentences have at least one resolved token', flush=True)
     if ambiguous:
         print(
             f'  Warning: {ambiguous} token resolutions were ambiguous '
@@ -251,11 +228,38 @@ def process(gitoeba_dir, jmdict_path, output_dir):
             file=sys.stderr,
         )
 
-    for lang, (conn, cur, n) in sorted(lang_dbs.items()):
+    # Process each language directory
+    lang_dirs = sorted(
+        d for d in os.listdir(translations_dir)
+        if os.path.isdir(os.path.join(translations_dir, d))
+    ) if os.path.isdir(translations_dir) else []
+
+    total_langs = 0
+    for lang in lang_dirs:
+        lang_dir = os.path.join(translations_dir, lang)
+        conn, cur = _open_lang_db(lang, output_dir)
+        n = 0
+        for path in iter_json_files(lang_dir):
+            with open(path, encoding='utf-8') as f:
+                t = json.load(f)
+            sent_id = t['id']
+            seqs = seq_cache.get(sent_id)
+            if not seqs:
+                continue
+            jpn_text = sentences[sent_id][0]
+            translation = t['translation']
+            for seq in seqs:
+                cur.execute(
+                    'INSERT OR IGNORE INTO ExamplePairs '
+                    '(seq, sentence_id, sentence, translation) VALUES (?, ?, ?, ?)',
+                    (seq, sent_id, jpn_text, translation),
+                )
+            n += 1
         _finish_lang_db(conn, cur)
         print(f'  examples_{lang}.db  ({n} sentences)', flush=True)
+        total_langs += 1
 
-    print('Done.', flush=True)
+    print(f'Done: {total_langs} language databases.', flush=True)
 
 
 HELP = (
