@@ -52,6 +52,10 @@ Example: `v01-2026-07-02` is the first release using format v01, built from the 
 
 When the format number changes, the previous release series becomes incompatible with older app versions. The date component alone changing means only dictionary content was updated; no app update is required.
 
+## Furigana
+
+The indexer computes bracket-notation furigana for each kanji headword (e.g. `食[た]べ物[もの]`) and stores it in the `furigana` column of `DictionaryEntry` as well as in the `kanjiData` JSON.  See [Furigana.md](Furigana.md) for the algorithm description and planned Kanjidic2 enhancement.
+
 ## Input
 
 Download [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) in XML format and gunzip before processing.

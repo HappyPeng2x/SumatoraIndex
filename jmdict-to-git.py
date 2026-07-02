@@ -70,6 +70,112 @@ def _open_binary(path):
 
 
 # ---------------------------------------------------------------------------
+# Furigana computation (ignorant algorithm — no external dictionary)
+# See Furigana.md for the algorithm description.
+# ---------------------------------------------------------------------------
+
+def _is_kanji(c):
+    cp = ord(c)
+    return (
+        0x4E00 <= cp <= 0x9FFF or  # CJK Unified Ideographs
+        0x3400 <= cp <= 0x4DBF or  # CJK Extension A
+        0xF900 <= cp <= 0xFAFF or  # CJK Compatibility Ideographs
+        0x20000 <= cp <= 0x2A6DF   # CJK Extension B
+    )
+
+
+def _kata_to_hira(s):
+    return ''.join(
+        chr(ord(c) - 0x60) if 'ァ' <= c <= 'ン' else c
+        for c in s
+    )
+
+
+def _parse_segments(text):
+    """Split text into alternating (is_kanji_run, raw, normalised) tuples."""
+    segments = []
+    norm = _kata_to_hira(text)
+    i = 0
+    while i < len(text):
+        if _is_kanji(text[i]):
+            j = i + 1
+            while j < len(text) and _is_kanji(text[j]):
+                j += 1
+            segments.append((True, text[i:j], norm[i:j]))
+            i = j
+        else:
+            j = i + 1
+            while j < len(text) and not _is_kanji(text[j]):
+                j += 1
+            segments.append((False, text[i:j], norm[i:j]))
+            i = j
+    return segments
+
+
+def _solve_ignorant(kanji_form, reading_hira):
+    """Return list of (base, ruby_or_None) pairs, or None on failure."""
+    segs = _parse_segments(kanji_form)
+    parts = []
+    pos = 0
+    for idx, (kanji_run, raw, norm) in enumerate(segs):
+        if not kanji_run:
+            end = pos + len(norm)
+            if _kata_to_hira(reading_hira[pos:end]) != norm:
+                return None
+            parts.append((raw, None))
+            pos = end
+        else:
+            next_kana_norm = None
+            for k in range(idx + 1, len(segs)):
+                if not segs[k][0]:
+                    next_kana_norm = segs[k][2]
+                    break
+            remaining = reading_hira[pos:]
+            if next_kana_norm is None:
+                kanji_reading = remaining
+            else:
+                anchor = remaining.find(next_kana_norm)
+                if anchor < 0:
+                    return None
+                kanji_reading = remaining[:anchor]
+            if not kanji_reading:
+                return None
+            parts.append((raw, kanji_reading))
+            pos += len(kanji_reading)
+    if pos != len(reading_hira):
+        return None
+    return parts
+
+
+def compute_furigana(kanji_form, reading):
+    """Return bracket-notation furigana string, or None for pure-kana forms.
+
+    Example: compute_furigana("食べ物", "たべもの") → "食[た]べ物[もの]"
+    Consecutive kanji blocks without intervening kana fall back to a single
+    bracket: 東京湾[とうきょうわん].
+    """
+    if not any(_is_kanji(c) for c in kanji_form):
+        return None
+    reading_hira = _kata_to_hira(reading)
+    parts = _solve_ignorant(kanji_form, reading_hira)
+    if parts is None:
+        return f'{kanji_form}[{reading_hira}]'
+    return ''.join(
+        base if ruby is None else f'{base}[{ruby}]'
+        for base, ruby in parts
+    )
+
+
+def _find_reading(kanji_text, kana_list):
+    """Return the first kana reading that applies to kanji_text."""
+    for k in kana_list:
+        applies = k.get('appliesToKanji', ['*'])
+        if '*' in applies or kanji_text in applies:
+            return k['text']
+    return None
+
+
+# ---------------------------------------------------------------------------
 # XML parsing
 # ---------------------------------------------------------------------------
 
@@ -164,6 +270,10 @@ def parse_entry(elem):
                 'stagk': get_texts(s, 'stagk'),
                 'stagr': get_texts(s, 'stagr'),
             })
+
+    for k in kanji:
+        reading = _find_reading(k['text'], kana)
+        k['furigana'] = compute_furigana(k['text'], reading) if reading else None
 
     return seq, kanji, kana, eng_senses, lang_glosses
 

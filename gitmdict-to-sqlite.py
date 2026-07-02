@@ -88,7 +88,7 @@ class SumatoraDB:
             'writingsPrio TEXT, writings TEXT, pos TEXT, xref TEXT, '
             'ant TEXT, misc TEXT, lsource TEXT, dial TEXT, s_inf TEXT, '
             'field TEXT, kanjiData TEXT, kanaData TEXT, '
-            'stagk TEXT, stagr TEXT, PRIMARY KEY (seq))'
+            'stagk TEXT, stagr TEXT, furigana TEXT, PRIMARY KEY (seq))'
         )
         c.execute(
             'CREATE TABLE DictionaryControl '
@@ -116,7 +116,7 @@ class SumatoraDB:
 
     def insert_entry(self, seq, readings_prio, readings, writings_prio,
                      writings, pos, xref, ant, misc, lsource, dial, s_inf,
-                     field, kanji_data, kana_data, stagk, stagr):
+                     field, kanji_data, kana_data, stagk, stagr, furigana):
         rp_kata = to_kana(readings_prio)
         r_kata = to_kana(readings)
         self._jmcur.execute(
@@ -135,11 +135,11 @@ class SumatoraDB:
             'INSERT INTO DictionaryEntry '
             '(seq, readingsPrio, readings, writingsPrio, writings, '
             'pos, xref, ant, misc, lsource, dial, s_inf, field, '
-            'kanjiData, kanaData, stagk, stagr) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'kanjiData, kanaData, stagk, stagr, furigana) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (seq, readings_prio, readings, writings_prio, writings,
              pos, xref, ant, misc, lsource, dial, s_inf, field,
-             kanji_data, kana_data, stagk, stagr),
+             kanji_data, kana_data, stagk, stagr, furigana),
         )
 
     # -- per-language translation DBs ----------------------------------------
@@ -336,12 +336,14 @@ def process(git_dir, output_dir):
         rp, r, wp, w = build_readings_writings(entry)
         pos, xref, ant, misc, lsrc, dial, sinf, field, stagk, stagr = \
             build_sense_fields(entry.get('senses', []))
-        kanji_data = _kanji_data_json(entry.get('kanji', []))
+        kanji_list = entry.get('kanji', [])
+        furigana = kanji_list[0].get('furigana') if kanji_list else None
+        kanji_data = _kanji_data_json(kanji_list)
         kana_data = _kana_data_json(entry.get('kana', []))
 
         db.insert_entry(seq, rp, r, wp, w, pos, xref, ant, misc,
                         lsrc, dial, sinf, field, kanji_data, kana_data,
-                        stagk, stagr)
+                        stagk, stagr, furigana)
         entry_count += 1
         if entry_count % 10000 == 0:
             print(f'  {entry_count} entries inserted…', flush=True)
