@@ -39,7 +39,7 @@ The original single-pass XML → SQLite script. Requires `libxml2` Python bindin
 
 ## Database releases
 
-Pre-built SQLite databases are published as GitHub release assets on this repository. Release tags follow the pattern:
+Pre-built SQLite databases are published as GitHub release assets on the [gitmdict repository](https://github.com/HappyPeng2x/gitmdict/releases). Release tags follow the pattern:
 
 ```
 v{format}-{date}
