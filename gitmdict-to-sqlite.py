@@ -46,10 +46,9 @@ def calculate_parts(space_separated):
 
 
 def calculate_parts_kana(space_separated):
-    kata = hira_to_kata(space_separated)
     parts = set()
     for word in space_separated.split():
-        parts |= calculate_parts_element(kata)
+        parts |= calculate_parts_element(hira_to_kata(word))
     return ' '.join(parts)
 
 
