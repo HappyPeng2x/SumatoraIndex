@@ -37,6 +37,21 @@ python3 sumatora-index.py -i <JMdict file> -o <output directory>
 
 The original single-pass XML → SQLite script. Requires `libxml2` Python bindings and `romkan`.
 
+## Database releases
+
+Pre-built SQLite databases are published as GitHub release assets on this repository. Release tags follow the pattern:
+
+```
+v{format}-{date}
+```
+
+- **`{format}`** — zero-padded integer that increments whenever the SQLite schema or stored data format changes in a way that requires the consumer (Sumatora Dictionary) to be updated. The current format is **`v01`**.
+- **`{date}`** — ISO 8601 date (YYYY-MM-DD) of the JMdict snapshot used to build the databases.
+
+Example: `v01-2026-07-02` is the first release using format v01, built from the JMdict data of 2026-07-02.
+
+When the format number changes, the previous release series becomes incompatible with older app versions. The date component alone changing means only dictionary content was updated; no app update is required.
+
 ## Input
 
 Download [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) in XML format and gunzip before processing.
