@@ -88,7 +88,8 @@ class SumatoraDB:
             'seq INTEGER, readingsPrio TEXT, readings TEXT, '
             'writingsPrio TEXT, writings TEXT, pos TEXT, xref TEXT, '
             'ant TEXT, misc TEXT, lsource TEXT, dial TEXT, s_inf TEXT, '
-            'field TEXT, PRIMARY KEY (seq))'
+            'field TEXT, kanjiData TEXT, kanaData TEXT, '
+            'stagk TEXT, stagr TEXT, PRIMARY KEY (seq))'
         )
         c.execute(
             'CREATE TABLE DictionaryControl '
@@ -116,7 +117,7 @@ class SumatoraDB:
 
     def insert_entry(self, seq, readings_prio, readings, writings_prio,
                      writings, pos, xref, ant, misc, lsource, dial, s_inf,
-                     field):
+                     field, kanji_data, kana_data, stagk, stagr):
         rp_kata = to_kana(readings_prio)
         r_kata = to_kana(readings)
         self._jmcur.execute(
@@ -134,10 +135,12 @@ class SumatoraDB:
         self._jmcur.execute(
             'INSERT INTO DictionaryEntry '
             '(seq, readingsPrio, readings, writingsPrio, writings, '
-            'pos, xref, ant, misc, lsource, dial, s_inf, field) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'pos, xref, ant, misc, lsource, dial, s_inf, field, '
+            'kanjiData, kanaData, stagk, stagr) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (seq, readings_prio, readings, writings_prio, writings,
-             pos, xref, ant, misc, lsource, dial, s_inf, field),
+             pos, xref, ant, misc, lsource, dial, s_inf, field,
+             kanji_data, kana_data, stagk, stagr),
         )
 
     # -- per-language translation DBs ----------------------------------------
@@ -205,21 +208,42 @@ def _none_or_json(value):
 
 
 def _lsource_to_json(lsource_array):
-    """Convert lsource sense arrays to the format used in the original DB.
+    """Serialize lsource sense arrays, preserving lang, text, full, wasei.
 
-    Original format: [[{"lang": "text"}, ...], ...]  (list of per-sense lists
-    of single-key dicts, where key=lang and value=text).
+    Format: [[{"lang":"...", "text":"...", "full":bool, "wasei":bool}, ...], ...]
     """
     if not lsource_array:
         return None
     converted = []
     for sense_sources in lsource_array:
-        sense_list = [{ls['lang']: ls['text'] or ''} for ls in sense_sources]
+        sense_list = [
+            {
+                'lang': ls['lang'],
+                'text': ls.get('text') or '',
+                'full': ls.get('full', True),
+                'wasei': ls.get('wasei', False),
+            }
+            for ls in sense_sources
+        ]
         converted.append(sense_list)
     has_data = any(sl for sl in converted)
     if not has_data:
         return None
     return json.dumps(converted, ensure_ascii=False)
+
+
+def _kanji_data_json(kanji_list):
+    """Serialize kanji element array preserving text, common, tags."""
+    if not kanji_list:
+        return None
+    return json.dumps(kanji_list, ensure_ascii=False)
+
+
+def _kana_data_json(kana_list):
+    """Serialize kana element array preserving text, common, tags, appliesToKanji, nokanji."""
+    if not kana_list:
+        return None
+    return json.dumps(kana_list, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +280,7 @@ def build_sense_fields(senses):
     """Aggregate per-sense structural fields into per-entry JSON arrays."""
     pos_arr, xref_arr, ant_arr, misc_arr = [], [], [], []
     lsrc_arr, dial_arr, sinf_arr, field_arr = [], [], [], []
+    stagk_arr, stagr_arr = [], []
 
     for s in senses:
         pos_arr.append(s.get('partOfSpeech', []))
@@ -266,6 +291,8 @@ def build_sense_fields(senses):
         dial_arr.append(s.get('dialect', []))
         sinf_arr.append(s.get('info', []))
         field_arr.append(s.get('field', []))
+        stagk_arr.append(s.get('stagk', []))
+        stagr_arr.append(s.get('stagr', []))
 
     return (
         _none_or_json(pos_arr),
@@ -276,6 +303,8 @@ def build_sense_fields(senses):
         _none_or_json(dial_arr),
         _none_or_json(sinf_arr),
         _none_or_json(field_arr),
+        _none_or_json(stagk_arr),
+        _none_or_json(stagr_arr),
     )
 
 
@@ -306,11 +335,14 @@ def process(git_dir, output_dir):
 
         seq = entry['seq']
         rp, r, wp, w = build_readings_writings(entry)
-        pos, xref, ant, misc, lsrc, dial, sinf, field = \
+        pos, xref, ant, misc, lsrc, dial, sinf, field, stagk, stagr = \
             build_sense_fields(entry.get('senses', []))
+        kanji_data = _kanji_data_json(entry.get('kanji', []))
+        kana_data = _kana_data_json(entry.get('kana', []))
 
         db.insert_entry(seq, rp, r, wp, w, pos, xref, ant, misc,
-                        lsrc, dial, sinf, field)
+                        lsrc, dial, sinf, field, kanji_data, kana_data,
+                        stagk, stagr)
         entry_count += 1
         if entry_count % 10000 == 0:
             print(f'  {entry_count} entries inserted…', flush=True)

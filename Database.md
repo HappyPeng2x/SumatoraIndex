@@ -21,10 +21,58 @@ The main entry table. One row per JMdict entry.
 | `xref` | TEXT | JSON: per-sense arrays of cross-references |
 | `ant` | TEXT | JSON: per-sense arrays of antonyms |
 | `misc` | TEXT | JSON: per-sense miscellaneous info |
-| `lsource` | TEXT | JSON: per-sense language source info |
+| `lsource` | TEXT | JSON: per-sense language source info (see format below) |
 | `dial` | TEXT | JSON: per-sense dialect codes |
 | `s_inf` | TEXT | JSON: per-sense sense information strings |
 | `field` | TEXT | JSON: per-sense field domain codes |
+| `kanjiData` | TEXT | JSON: full kanji element array (see format below) |
+| `kanaData` | TEXT | JSON: full kana element array (see format below) |
+| `stagk` | TEXT | JSON: per-sense kanji form restrictions (NULL when unrestricted) |
+| `stagr` | TEXT | JSON: per-sense reading form restrictions (NULL when unrestricted) |
+
+#### `kanjiData` format
+
+Array of kanji element objects in the order they appear in JMdict (priority forms first, then non-priority). Each object:
+
+```json
+[
+  {"text": "漢字形", "common": true, "tags": ["ichi1", "news1"]},
+  {"text": "旧字体", "common": false, "tags": ["iK", "rK"]}
+]
+```
+
+`tags` contains both priority codes (`ke_pri`: `ichi1`, `news1`, `nf*`, `spec1`, `spec2`, `gai1`, `gai2`) and information codes (`ke_inf`: `iK` irregular kanji, `io` outdated, `rK` rarely-used kanji, `oK` out-dated kanji, `ateji`).
+
+#### `kanaData` format
+
+Array of kana element objects in the same order as the source. Each object:
+
+```json
+[
+  {"text": "よみかた", "common": true, "tags": ["ichi1"], "appliesToKanji": ["*"], "nokanji": false},
+  {"text": "よみがな", "common": false, "tags": ["ok"], "appliesToKanji": ["漢字形"], "nokanji": false}
+]
+```
+
+- `appliesToKanji`: list of kanji text values this reading applies to, or `["*"]` for all.
+- `nokanji`: true when this reading is valid for the entry even without any kanji form (`<re_nokanji/>`).
+- `tags` contains both `re_pri` priority codes and `re_inf` info codes (`ik` irregular kana, `ok` outdated, `gikun` gikun/jukujikun reading, etc.).
+
+#### `lsource` format
+
+```json
+[[{"lang": "fra", "text": "mot", "full": true, "wasei": false}], []]
+```
+
+Outer array is per-sense; inner array is the language source list for that sense. Each object has `lang` (ISO 639-2), `text` (source word, may be empty), `full` (true = fully sourced, false = partial/`ls_type=part`), `wasei` (true = wasei-eigo).
+
+#### `stagk` / `stagr` format
+
+Per-sense arrays of form strings; NULL when every sense is unrestricted.
+
+```json
+[[], ["漢字形1"], []]
+```
 
 ### DictionaryIndex (FTS5, contentless)
 
@@ -140,8 +188,10 @@ Forward search steps (stopping when enough results are found):
 ## Building the databases
 
 ```sh
-python3 xml-to-git.py -i JMdict_e.xml -o gitmdict/
+python3 jmdict-to-git.py -o gitmdict/
 python3 git-to-sqlite.py -i gitmdict/ -o output/
 ```
+
+`jmdict-to-git.py` downloads JMdict automatically (cached in `~/.cache/jmdict/`).
 
 Output: `output/jmdict.db`, `output/eng.db`, `output/ger.db`, etc.

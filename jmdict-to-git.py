@@ -114,11 +114,13 @@ def parse_entry(elem):
         infs = [c.name for e in r.findall('re_inf') for c in e
                 if isinstance(c, etree._Entity)]
         restr = [e.text for e in r.findall('re_restr') if e.text]
+        nokanji = r.find('re_nokanji') is not None
         kana.append({
             'text': reb,
             'common': bool(pris),
             'tags': pris + infs,
             'appliesToKanji': restr if restr else ['*'],
+            'nokanji': nokanji,
         })
 
     lang_glosses = {}
@@ -159,6 +161,8 @@ def parse_entry(elem):
                 'misc': get_entity_names(s, 'misc'),
                 'info': get_texts(s, 's_inf'),
                 'languageSource': lsources,
+                'stagk': get_texts(s, 'stagk'),
+                'stagr': get_texts(s, 'stagr'),
             })
 
     return seq, kanji, kana, eng_senses, lang_glosses
