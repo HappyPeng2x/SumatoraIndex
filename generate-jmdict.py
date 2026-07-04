@@ -9,11 +9,11 @@ Dependency graph (→ = depends on):
     kanjidic2-to-git.py    →  gitjidic2/
     jmnedict-to-git.py     →  gitnedict/
     jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
-    [pitch-to-git.py]      →  gitch/          (only when --pitch-tsv is given)
+    [pitch-to-git.py]      →  gitch/          (when *.tsv found in --pitch-dir or --pitch-tsv given)
     gitjidic2-to-sqlite.py →  kanjidic2.db
     gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitnedict/ for proper names)
-    [gitch-to-sqlite.py]→  pitch.db        (only when gitch/entries/ exists)
-    [gitoeba-to-sqlite.py] →  examples_{lang}.db    (only when --gitoeba is given)
+    [gitch-to-sqlite.py]   →  pitch.db        (when gitch/entries/ exists)
+    [gitoeba-to-sqlite.py] →  examples_{lang}.db    (when --gitoeba dir exists)
 
 Steps in brackets are optional and only execute when their prerequisite data
 is present.
@@ -22,10 +22,11 @@ Usage:
     generate-jmdict.py -o <sqlite output dir>
         [--gitjidic2  <dir>]   intermediate kanjidic2 JSON repo  (default: ~/Code/gitjidic2)
         [--gitmdict   <dir>]   intermediate jmdict JSON repo      (default: ~/Code/gitmdict)
-        [--gitnedict   <dir>]   intermediate jmnedict JSON repo    (default: ~/Code/gitnedict)
+        [--gitnedict  <dir>]   intermediate jmnedict JSON repo    (default: ~/Code/gitnedict)
         [--gitch      <dir>]   intermediate pitch JSON repo       (default: ~/Code/gitch)
-        [--gitoeba    <dir>]   Tatoeba JSON corpus; triggers examples pipeline
-        [--pitch-tsv  <file>]  repeatable; triggers pitch-to-git step
+        [--pitch-dir  <dir>]   directory scanned for *.tsv pitch files (default: ~/Code/pitch)
+        [--pitch-tsv  <file>]  repeatable; explicit pitch TSV file (overrides --pitch-dir scan)
+        [--gitoeba    <dir>]   Tatoeba JSON corpus                (default: ~/Code/gitoeba)
         [--cache      <dir>]   download cache root                (default: ~/.cache)
 
 This program is free software: you can redistribute it and/or modify it under
@@ -39,6 +40,7 @@ __license__ = "GPLv3"
 __version__ = "0.2.0"
 
 import getopt
+import glob
 import os
 import subprocess
 import sys
@@ -49,10 +51,11 @@ HELP = (
     'usage: generate-jmdict.py -o <sqlite output dir>\n'
     '    [--gitjidic2  <dir>]   default: ~/Code/gitjidic2\n'
     '    [--gitmdict   <dir>]   default: ~/Code/gitmdict\n'
-    '    [--gitnedict   <dir>]   default: ~/Code/gitnedict\n'
+    '    [--gitnedict  <dir>]   default: ~/Code/gitnedict\n'
     '    [--gitch      <dir>]   default: ~/Code/gitch\n'
-    '    [--gitoeba    <dir>]   triggers examples pipeline\n'
-    '    [--pitch-tsv  <file>]  repeatable; triggers pitch-to-git step\n'
+    '    [--pitch-dir  <dir>]   default: ~/Code/pitch  (scanned for *.tsv)\n'
+    '    [--pitch-tsv  <file>]  repeatable; explicit pitch TSV (overrides --pitch-dir)\n'
+    '    [--gitoeba    <dir>]   default: ~/Code/gitoeba\n'
     '    [--cache      <dir>]   default: ~/.cache'
 )
 
@@ -68,12 +71,13 @@ def run(*args):
 
 
 def main(argv):
-    output_dir   = ''
+    output_dir    = ''
     gitjidic2_dir = os.path.expanduser('~/Code/gitjidic2')
     gitmdict_dir  = os.path.expanduser('~/Code/gitmdict')
-    gitnedict_dir  = os.path.expanduser('~/Code/gitnedict')
+    gitnedict_dir = os.path.expanduser('~/Code/gitnedict')
     gitch_dir     = os.path.expanduser('~/Code/gitch')
-    gitoeba_dir   = None
+    pitch_dir     = os.path.expanduser('~/Code/pitch')
+    gitoeba_dir   = os.path.expanduser('~/Code/gitoeba')
     pitch_tsvs    = []
     cache_dir     = os.path.expanduser('~/.cache')
 
@@ -81,7 +85,7 @@ def main(argv):
         opts, _ = getopt.getopt(
             argv, 'ho:',
             ['odir=', 'gitjidic2=', 'gitmdict=', 'gitnedict=', 'gitch=',
-             'gitoeba=', 'pitch-tsv=', 'cache='],
+             'pitch-dir=', 'gitoeba=', 'pitch-tsv=', 'cache='],
         )
     except getopt.GetoptError:
         print(HELP)
@@ -101,6 +105,8 @@ def main(argv):
             gitnedict_dir = arg
         elif opt == '--gitch':
             gitch_dir = arg
+        elif opt == '--pitch-dir':
+            pitch_dir = arg
         elif opt == '--gitoeba':
             gitoeba_dir = arg
         elif opt == '--pitch-tsv':
@@ -136,6 +142,9 @@ def main(argv):
         '--kanjidic2', gitjidic2_dir,
         '--cache', jmdict_cache)
 
+    if not pitch_tsvs and os.path.isdir(pitch_dir):
+        pitch_tsvs = sorted(glob.glob(os.path.join(pitch_dir, '*.tsv')))
+
     if pitch_tsvs:
         print('--- Step 4: pitch-to-git ---', flush=True)
         pitch_args = [script('pitch-to-git.py')]
@@ -144,7 +153,7 @@ def main(argv):
         pitch_args += ['-o', gitch_dir]
         run(*pitch_args)
     else:
-        print('--- Step 4: pitch-to-git skipped (no --pitch-tsv given) ---', flush=True)
+        print(f'--- Step 4: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
 
     # ------------------------------------------------------------------
     # Stage 2 — compile JSON repos to SQLite
@@ -171,7 +180,7 @@ def main(argv):
         print(f'--- Step 7: gitch-to-sqlite skipped (no gitch data at {gitch_dir}) ---',
               flush=True)
 
-    if gitoeba_dir:
+    if os.path.isdir(gitoeba_dir):
         jmdict_path = os.path.join(output_dir, 'jmdict.db')
         print('--- Step 8: gitoeba-to-sqlite ---', flush=True)
         run(script('gitoeba-to-sqlite.py'),
@@ -179,7 +188,8 @@ def main(argv):
             '-j', jmdict_path,
             '-o', output_dir)
     else:
-        print('--- Step 8: gitoeba-to-sqlite skipped (no --gitoeba given) ---', flush=True)
+        print(f'--- Step 8: gitoeba-to-sqlite skipped ({gitoeba_dir} not found) ---',
+              flush=True)
 
     print('Done.', flush=True)
 
