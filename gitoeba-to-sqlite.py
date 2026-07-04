@@ -172,18 +172,20 @@ class TokenResolver:
 
 _CREATE_TABLE = '''\
 CREATE TABLE ExamplePairs (
-    seq         INTEGER,
-    sentence_id INTEGER,
-    sentence    TEXT,
-    translation TEXT,
+    seq           INTEGER,
+    sentence_id   INTEGER,
+    sentence      TEXT,
+    translation   TEXT,
+    matched_token TEXT,
     PRIMARY KEY (seq, sentence_id)
 )'''
 
 _CREATE_VIEW = '''\
 CREATE VIEW ExamplesSummary AS
     SELECT seq,
-           json_group_array(sentence)    AS sentences,
-           json_group_array(translation) AS translations
+           json_group_array(sentence)      AS sentences,
+           json_group_array(translation)   AS translations,
+           json_group_array(matched_token) AS matched_tokens
     FROM ExamplePairs
     GROUP BY seq'''
 
@@ -240,20 +242,25 @@ def process(gitoeba_dir, jmdict_path, output_dir):
         sentences[sent['id']] = (sent['text'], sent.get('indices', []))
     print(f'  {len(sentences)} sentences loaded', flush=True)
 
-    # Precompute seq sets and furigana-marked sentence text per sentence
+    # Precompute seq→token maps and furigana-marked sentence text per sentence
     print('Resolving tokens…', flush=True)
-    seq_cache = {}     # sentence_id → frozenset of JMdict seqs
+    seq_cache = {}     # sentence_id → {seq: matched_token surface form}
     marked_cache = {}  # sentence_id → furigana-marked sentence text
     ambiguous = 0
     for sent_id, (text, indices) in sentences.items():
-        seqs = set()
+        seq_to_token = {}
         for tok in indices:
             resolved = resolver.resolve(tok['writing'], tok.get('reading'))
             if len(resolved) > 1:
                 ambiguous += 1
-            seqs.update(resolved)
-        if seqs:
-            seq_cache[sent_id] = frozenset(seqs)
+            # Surface form as it appears in the sentence (inflected form when
+            # expression is set; otherwise the dictionary writing form).
+            surface = tok.get('expression') or tok['writing']
+            for seq in resolved:
+                if seq not in seq_to_token:  # first-match wins per sentence
+                    seq_to_token[seq] = surface
+        if seq_to_token:
+            seq_cache[sent_id] = seq_to_token
             marked_cache[sent_id] = markup_sentence(text, indices)
     resolver.close()
     print(f'  {len(seq_cache)} sentences have at least one resolved token', flush=True)
@@ -279,16 +286,17 @@ def process(gitoeba_dir, jmdict_path, output_dir):
             with open(path, encoding='utf-8') as f:
                 t = json.load(f)
             sent_id = t['id']
-            seqs = seq_cache.get(sent_id)
-            if not seqs:
+            seq_to_token = seq_cache.get(sent_id)
+            if not seq_to_token:
                 continue
             jpn_text = marked_cache[sent_id]
             translation = t['translation']
-            for seq in seqs:
+            for seq, matched_token in seq_to_token.items():
                 cur.execute(
                     'INSERT OR IGNORE INTO ExamplePairs '
-                    '(seq, sentence_id, sentence, translation) VALUES (?, ?, ?, ?)',
-                    (seq, sent_id, jpn_text, translation),
+                    '(seq, sentence_id, sentence, translation, matched_token) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    (seq, sent_id, jpn_text, translation, matched_token),
                 )
             n += 1
         _finish_lang_db(conn, cur)

@@ -91,6 +91,130 @@ def _kata_to_hira(s):
     )
 
 
+# ---------------------------------------------------------------------------
+# Kanjidic2 knowledge: reading variants for the informed furigana solver
+# ---------------------------------------------------------------------------
+
+# On'yomi endings that produce a sokuon (geminate っ) prefix form in compounds.
+_SOKUON_FINALS = frozenset('くきちつ')
+
+# Rendaku: initial mora voicing table (hiragana).
+_RENDAKU = {
+    'か': 'が', 'き': 'ぎ', 'く': 'ぐ', 'け': 'げ', 'こ': 'ご',
+    'さ': 'ざ', 'し': 'じ', 'す': 'ず', 'せ': 'ぜ', 'そ': 'ぞ',
+    'た': 'だ', 'ち': 'ぢ', 'つ': 'づ', 'て': 'で', 'と': 'ど',
+    'は': 'ば', 'ひ': 'び', 'ふ': 'ぶ', 'へ': 'べ', 'ほ': 'ぼ',
+}
+# Small kana that can follow a mora (digraphs: しゃ, ちょ, etc.)
+_SMALL_KANA = frozenset('ぁぃぅぇぉゃゅょ')
+
+
+def _sokuon(hira):
+    """Return sokuon prefix form (final mora → っ), or None if not applicable."""
+    if hira and hira[-1] in _SOKUON_FINALS:
+        return hira[:-1] + 'っ'
+    return None
+
+
+def _rendaku(hira):
+    """Return rendaku (initial voicing) form, or None if not applicable."""
+    if not hira:
+        return None
+    voiced = _RENDAKU.get(hira[0])
+    if voiced is None:
+        return None
+    # Preserve a small-kana second character (digraph: しゃ → じゃ)
+    if len(hira) >= 2 and hira[1] in _SMALL_KANA:
+        return voiced + hira[1:]
+    return voiced + hira[1:]
+
+
+def _on_variants(hira):
+    """Yield all valid surface forms for one on'yomi in hiragana."""
+    yield hira
+    sok = _sokuon(hira)
+    if sok:
+        yield sok
+    rend = _rendaku(hira)
+    if rend:
+        yield rend
+        sok_rend = _sokuon(rend)
+        if sok_rend:
+            yield sok_rend
+
+
+def build_knowledge(gitjidic2_dir):
+    """Build {char → frozenset of hiragana reading stems} from a gitjidic2 repo.
+
+    For each character the set contains:
+    - All on'yomi variants: base hiragana, sokuon form, rendaku form,
+      rendaku-sokuon form.
+    - Kun'yomi stem (text before the '.' okurigana separator), plus its
+      rendaku variant.
+    """
+    knowledge = {}
+    chars_dir = os.path.join(gitjidic2_dir, 'characters')
+    if not os.path.isdir(chars_dir):
+        raise FileNotFoundError(
+            f'gitjidic2 characters directory not found: {chars_dir}\n'
+            'Run kanjidic2-to-git.py first.'
+        )
+    for root, dirs, files in os.walk(chars_dir):
+        dirs.sort()
+        for name in sorted(files):
+            if not name.endswith('.json'):
+                continue
+            with open(os.path.join(root, name), encoding='utf-8') as fh:
+                data = json.load(fh)
+            char = data.get('char')
+            if not char:
+                continue
+            variants = set()
+            for on in data.get('on', []):
+                for v in _on_variants(_kata_to_hira(on)):
+                    variants.add(v)
+            for kun in data.get('kun', []):
+                stem = kun.split('.')[0]
+                if stem:
+                    variants.add(stem)
+                    rend = _rendaku(stem)
+                    if rend:
+                        variants.add(rend)
+            knowledge[char] = frozenset(variants)
+    print(f'  Kanjidic2 knowledge loaded: {len(knowledge)} characters', flush=True)
+    return knowledge
+
+
+# ---------------------------------------------------------------------------
+# Informed partition solver for consecutive kanji runs
+# ---------------------------------------------------------------------------
+
+def _partitions(s, k):
+    """Yield all tuples of k non-empty strings whose concatenation equals s."""
+    if k == 1:
+        if s:
+            yield (s,)
+        return
+    for i in range(1, len(s) - k + 2):
+        for rest in _partitions(s[i:], k - 1):
+            yield (s[:i],) + rest
+
+
+def _split_kanji_run(run, reading, knowledge):
+    """Try to assign one reading per character in run using knowledge.
+
+    Returns a tuple of per-character readings when exactly one valid partition
+    exists; returns None when the split is impossible or ambiguous.
+    Only called for multi-character runs (len(run) >= 2).
+    """
+    n = len(run)
+    valid = set()
+    for parts in _partitions(reading, n):
+        if all(parts[i] in knowledge.get(run[i], frozenset()) for i in range(n)):
+            valid.add(parts)
+    return next(iter(valid)) if len(valid) == 1 else None
+
+
 def _parse_segments(text):
     """Split text into alternating (is_kanji_run, raw, normalised) tuples."""
     segments = []
@@ -112,8 +236,13 @@ def _parse_segments(text):
     return segments
 
 
-def _solve_ignorant(kanji_form, reading_hira):
-    """Return list of (base, ruby_or_None) pairs, or None on failure."""
+def _solve_ignorant(kanji_form, reading_hira, knowledge=None):
+    """Return list of (base, ruby_or_None) pairs, or None on failure.
+
+    When knowledge is provided, consecutive kanji runs of two or more
+    characters are split per character using _split_kanji_run; a block bracket
+    is kept only when the partition is ambiguous or impossible.
+    """
     segs = _parse_segments(kanji_form)
     parts = []
     pos = 0
@@ -140,6 +269,14 @@ def _solve_ignorant(kanji_form, reading_hira):
                 kanji_reading = remaining[:anchor]
             if not kanji_reading:
                 return None
+            # For multi-char runs, try per-character split with knowledge.
+            if knowledge and len(raw) > 1:
+                split = _split_kanji_run(raw, kanji_reading, knowledge)
+                if split:
+                    for char, r in zip(raw, split):
+                        parts.append((char, r))
+                    pos += len(kanji_reading)
+                    continue
             parts.append((raw, kanji_reading))
             pos += len(kanji_reading)
     if pos != len(reading_hira):
@@ -147,23 +284,73 @@ def _solve_ignorant(kanji_form, reading_hira):
     return parts
 
 
-def compute_furigana(kanji_form, reading):
+def compute_furigana(kanji_form, reading, knowledge=None):
     """Return bracket-notation furigana string, or None for pure-kana forms.
 
     Example: compute_furigana("食べ物", "たべもの") → "食[た]べ物[もの]"
-    Consecutive kanji blocks without intervening kana fall back to a single
-    bracket: 東京湾[とうきょうわん].
+    Without knowledge, consecutive kanji blocks fall back to a single bracket:
+    東京湾[とうきょうわん].  With knowledge (from build_knowledge), per-character
+    splitting is attempted: 東[とう]京[きょう]湾[わん].
     """
     if not any(_is_kanji(c) for c in kanji_form):
         return None
     reading_hira = _kata_to_hira(reading)
-    parts = _solve_ignorant(kanji_form, reading_hira)
+    parts = _solve_ignorant(kanji_form, reading_hira, knowledge)
     if parts is None:
         return f'{kanji_form}[{reading_hira}]'
     return ''.join(
         base if ruby is None else f'{base}[{ruby}]'
         for base, ruby in parts
     )
+
+
+# ---------------------------------------------------------------------------
+# Patch system (RFC 7396 JSON Merge Patch)
+# ---------------------------------------------------------------------------
+
+# Default patches directory: SumatoraIndex/patches/ next to this script.
+# load_patches() silently returns {} when the directory does not exist.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_PATCHES_DIR = os.path.join(_SCRIPT_DIR, 'patches')
+
+
+def load_patches(patches_dir):
+    """Return {seq: patch_dict} for all JSON files under patches_dir/entries/.
+
+    Directory structure mirrors gitmdict/entries/{shard}/{seq}.json.
+    Returns an empty dict when patches_dir or its entries/ subdirectory is absent.
+    """
+    patches = {}
+    entries_dir = os.path.join(patches_dir, 'entries')
+    if not os.path.isdir(entries_dir):
+        return patches
+    for root, dirs, files in os.walk(entries_dir):
+        dirs.sort()
+        for name in sorted(files):
+            if not name.endswith('.json'):
+                continue
+            try:
+                seq = int(name[:-5])
+            except ValueError:
+                continue
+            with open(os.path.join(root, name), encoding='utf-8') as f:
+                patches[seq] = json.load(f)
+    if patches:
+        print(f'  {len(patches)} patches loaded from {patches_dir}', flush=True)
+    return patches
+
+
+def apply_patch(data, patch):
+    """Apply an RFC 7396 JSON Merge Patch to data in-place.
+
+    Each key in patch replaces the corresponding key in data.
+    A null value removes the key from data. Keys absent from patch are kept.
+    """
+    for key, value in patch.items():
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
 
 
 def _find_reading(kanji_text, kana_list):
@@ -202,7 +389,7 @@ def get_texts(parent, tag):
     return [el.text for el in parent.findall(tag) if el.text]
 
 
-def parse_entry(elem):
+def parse_entry(elem, knowledge=None):
     seq = int(elem.findtext('ent_seq'))
 
     kanji = []
@@ -273,7 +460,7 @@ def parse_entry(elem):
 
     for k in kanji:
         reading = _find_reading(k['text'], kana)
-        k['furigana'] = compute_furigana(k['text'], reading) if reading else None
+        k['furigana'] = compute_furigana(k['text'], reading, knowledge) if reading else None
 
     return seq, kanji, kana, eng_senses, lang_glosses
 
@@ -293,7 +480,10 @@ def write_json(path, data):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process(output_dir, cache_dir):
+def process(output_dir, cache_dir, kanjidic2_dir=None, patches_dir=None):
+    knowledge = build_knowledge(kanjidic2_dir) if kanjidic2_dir else None
+    patches = load_patches(patches_dir if patches_dir is not None else _DEFAULT_PATCHES_DIR)
+
     jmdict_path = ensure_cached(JMDICT_URL, cache_dir)
     print(f'  Using {jmdict_path}', flush=True)
 
@@ -308,15 +498,20 @@ def process(output_dir, cache_dir):
             f, tag='entry',
             load_dtd=True, resolve_entities=False, no_network=True,
         ):
-            seq, kanji, kana, eng_senses, lang_glosses = parse_entry(elem)
+            seq, kanji, kana, eng_senses, lang_glosses = parse_entry(elem, knowledge)
             elem.clear()
             while elem.getprevious() is not None:
                 del elem.getparent()[0]
 
+            entry_data = {'seq': seq, 'kanji': kanji, 'kana': kana, 'senses': eng_senses}
+            if seq in patches:
+                apply_patch(entry_data, patches[seq])
+                seq = entry_data['seq']
+
             sh = seq // SHARD_SIZE
             write_json(
                 os.path.join(output_dir, 'entries', str(sh), f'{seq}.json'),
-                {'seq': seq, 'kanji': kanji, 'kana': kana, 'senses': eng_senses},
+                entry_data,
             )
             for lang, glosses in lang_glosses.items():
                 write_json(
@@ -338,15 +533,18 @@ def process(output_dir, cache_dir):
 
 HELP = (
     'usage: jmdict-to-git.py '
-    '-o <gitmdict directory> [--cache <cache directory>]'
+    '-o <gitmdict directory> [--cache <cache directory>] '
+    '[--kanjidic2 <gitjidic2 directory>] [--patches <patches directory>]'
 )
 
 
 def main(argv):
     output_dir = ''
     cache_dir = os.path.expanduser('~/.cache/jmdict')
+    kanjidic2_dir = None
+    patches_dir = None
     try:
-        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache='])
+        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache=', 'kanjidic2=', 'patches='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -358,10 +556,14 @@ def main(argv):
             output_dir = arg
         elif opt == '--cache':
             cache_dir = arg
+        elif opt == '--kanjidic2':
+            kanjidic2_dir = arg
+        elif opt == '--patches':
+            patches_dir = arg
     if not output_dir:
         print(HELP)
         sys.exit(2)
-    process(output_dir, cache_dir)
+    process(output_dir, cache_dir, kanjidic2_dir, patches_dir)
 
 
 if __name__ == '__main__':
