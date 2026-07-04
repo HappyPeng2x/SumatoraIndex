@@ -12,7 +12,7 @@ Dependency graph (→ = depends on):
     [pitch-to-git.py]      →  gitch/          (only when --pitch-tsv is given)
     gitjidic2-to-sqlite.py →  kanjidic2.db
     gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitndict/ for proper names)
-    [gitpitch-to-sqlite.py]→  pitch.db        (only when gitch/entries/ exists)
+    [gitch-to-sqlite.py]→  pitch.db        (only when gitch/entries/ exists)
     [gitoeba-to-sqlite.py] →  examples_{lang}.db    (only when --gitoeba is given)
 
 Steps in brackets are optional and only execute when their prerequisite data
@@ -163,12 +163,12 @@ def main(argv):
 
     gitch_entries = os.path.join(gitch_dir, 'entries')
     if os.path.isdir(gitch_entries):
-        print('--- Step 7: gitpitch-to-sqlite ---', flush=True)
-        run(script('gitpitch-to-sqlite.py'),
+        print('--- Step 7: gitch-to-sqlite ---', flush=True)
+        run(script('gitch-to-sqlite.py'),
             '-i', gitch_dir,
             '-o', output_dir)
     else:
-        print(f'--- Step 7: gitpitch-to-sqlite skipped (no gitch data at {gitch_dir}) ---',
+        print(f'--- Step 7: gitch-to-sqlite skipped (no gitch data at {gitch_dir}) ---',
               flush=True)
 
     if gitoeba_dir:

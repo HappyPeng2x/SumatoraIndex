@@ -17,7 +17,7 @@ Database schema:
       value    INTEGER    — build_timestamp (Unix epoch) or entry_count
 
 Usage:
-    gitpitch-to-sqlite.py -i <gitch directory> -o <output directory>
+    gitch-to-sqlite.py -i <gitch directory> -o <output directory>
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -111,7 +111,7 @@ def process(gitch_dir, output_dir):
 
 
 HELP = (
-    'usage: gitpitch-to-sqlite.py '
+    'usage: gitch-to-sqlite.py '
     '-i <gitch directory> -o <output directory>'
 )
 

@@ -8,7 +8,7 @@ Five SQLite databases are distributed:
 | `{lang}.db` | `gitmdict-to-sqlite.py` | Per-language gloss translations + FTS5 |
 | `examples_{lang}.db` | `gitoeba-to-sqlite.py` | Tatoeba example sentences linked to entries |
 | `kanjidic2.db` | `gitjidic2-to-sqlite.py` | Kanji character metadata |
-| `pitch.db` | `gitpitch-to-sqlite.py` | Pitch accent data |
+| `pitch.db` | `gitch-to-sqlite.py` | Pitch accent data |
 
 ---
 
@@ -322,7 +322,7 @@ One row per kanji character.
 
 ## pitch.db
 
-Built by `gitpitch-to-sqlite.py` from a gitch JSON repository (produced by `pitch-to-git.py`).
+Built by `gitch-to-sqlite.py` from a gitch JSON repository (produced by `pitch-to-git.py`).
 
 ### PitchAccent
 
@@ -432,7 +432,7 @@ python3 pitch-to-git.py      -i pitch_data.tsv    -o ~/Code/gitch/
 # Stage 2 — SQLite databases
 python3 gitjidic2-to-sqlite.py  -i ~/Code/gitjidic2/ -o output/
 python3 gitmdict-to-sqlite.py   -i ~/Code/gitmdict/  --nedict ~/Code/gitndict/ -o output/
-python3 gitpitch-to-sqlite.py   -i ~/Code/gitch/     -o output/
+python3 gitch-to-sqlite.py   -i ~/Code/gitch/     -o output/
 python3 gitoeba-to-sqlite.py    -i ~/Code/gitoeba/   -j output/jmdict.db -o output/
 ```
 
