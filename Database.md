@@ -8,7 +8,7 @@ Five SQLite databases are distributed:
 | `{lang}.db` | `gitmdict-to-sqlite.py` | Per-language gloss translations + FTS5 |
 | `examples_{lang}.db` | `gitoeba-to-sqlite.py` | Tatoeba example sentences linked to entries |
 | `kanjidic2.db` | `gitjidic2-to-sqlite.py` | Kanji character metadata |
-| `pitch.db` | `pitch-to-sqlite.py` | Pitch accent data |
+| `pitch.db` | `gitpitch-to-sqlite.py` | Pitch accent data |
 
 ---
 
@@ -322,7 +322,7 @@ One row per kanji character.
 
 ## pitch.db
 
-Built by `pitch-to-sqlite.py` from one or more user-supplied TSV files.
+Built by `gitpitch-to-sqlite.py` from a gitch JSON repository (produced by `pitch-to-git.py`).
 
 ### PitchAccent
 
@@ -408,10 +408,11 @@ python3 gitjidic2-to-sqlite.py -i gitjidic2/ -o output/
 python3 gitoeba-to-sqlite.py  [options]
 
 # Pitch accent (requires a user-supplied TSV file):
-python3 pitch-to-sqlite.py -i pitch_data.tsv -o output/
+python3 pitch-to-git.py     -i pitch_data.tsv -o ~/Code/gitch/
+python3 gitpitch-to-sqlite.py -i ~/Code/gitch/ -o output/
 ```
 
-`jmdict-to-git.py` and `jmnedict-to-git.py` download their source XML automatically (cached locally). `kanjidic2-to-git.py` also downloads automatically. `pitch-to-sqlite.py` does not download anything — supply your own TSV data.
+`jmdict-to-git.py` and `jmnedict-to-git.py` download their source XML automatically (cached locally). `kanjidic2-to-git.py` also downloads automatically. `pitch-to-git.py` does not download anything — supply your own TSV data.
 
 Curated entry corrections can be placed in `patches/entries/{shard}/{seq}.json` as RFC 7396 JSON Merge Patches; they are applied automatically during `jmdict-to-git.py`.
 
