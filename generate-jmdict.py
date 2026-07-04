@@ -9,16 +9,14 @@ Dependency graph (→ = depends on):
     kanjidic2-to-git.py    →  gitjidic2/
     jmnedict-to-git.py     →  gitnedict/
     jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
-    wadoku-to-git.py       →  gitch/          (Wadoku CC BY-SA pitch accent data)
-    [pitch-to-git.py]      →  gitch/          (supplemental *.tsv; when --pitch-dir or --pitch-tsv given)
+    [pitch-to-git.py]      →  gitch/          (when *.tsv found in --pitch-dir or --pitch-tsv given)
     gitjidic2-to-sqlite.py →  kanjidic2.db
     gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitnedict/ for proper names)
-    gitch-to-sqlite.py     →  pitch.db
+    [gitch-to-sqlite.py]   →  pitch.db        (when gitch/entries/ exists)
     [gitoeba-to-sqlite.py] →  examples_{lang}.db    (when --gitoeba dir exists)
 
 Steps in brackets are optional and only execute when their prerequisite data
-is present.  wadoku-to-git.py always runs; pitch-to-git.py is supplemental
-(TSV entries for the same word overwrite Wadoku entries in gitch).
+is present.
 
 Usage:
     generate-jmdict.py -o <sqlite output dir>
@@ -39,7 +37,7 @@ version.
 
 __author__ = "Nicolas Centa"
 __license__ = "GPLv3"
-__version__ = "0.3.0"
+__version__ = "0.2.0"
 
 import getopt
 import glob
@@ -123,7 +121,6 @@ def main(argv):
     kanjidic2_cache = os.path.join(cache_dir, 'kanjidic2')
     jmnedict_cache  = os.path.join(cache_dir, 'jmnedict')
     jmdict_cache    = os.path.join(cache_dir, 'jmdict')
-    wadoku_cache    = os.path.join(cache_dir, 'wadoku')
 
     # ------------------------------------------------------------------
     # Stage 1 — build JSON repos (git-friendly intermediate data)
@@ -145,53 +142,53 @@ def main(argv):
         '--kanjidic2', gitjidic2_dir,
         '--cache', jmdict_cache)
 
-    print('--- Step 4: wadoku-to-git (pitch accent) ---', flush=True)
-    run(script('wadoku-to-git.py'),
-        '-o', gitch_dir,
-        '--cache', wadoku_cache)
-
     if not pitch_tsvs and os.path.isdir(pitch_dir):
         pitch_tsvs = sorted(glob.glob(os.path.join(pitch_dir, '*.tsv')))
 
     if pitch_tsvs:
-        print('--- Step 5: pitch-to-git (supplemental TSV) ---', flush=True)
+        print('--- Step 4: pitch-to-git ---', flush=True)
         pitch_args = [script('pitch-to-git.py')]
         for tsv in pitch_tsvs:
             pitch_args += ['-i', tsv]
         pitch_args += ['-o', gitch_dir]
         run(*pitch_args)
     else:
-        print(f'--- Step 5: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
+        print(f'--- Step 4: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
 
     # ------------------------------------------------------------------
     # Stage 2 — compile JSON repos to SQLite
     # ------------------------------------------------------------------
 
-    print('--- Step 6: gitjidic2-to-sqlite ---', flush=True)
+    print('--- Step 5: gitjidic2-to-sqlite ---', flush=True)
     run(script('gitjidic2-to-sqlite.py'),
         '-i', gitjidic2_dir,
         '-o', output_dir)
 
-    print('--- Step 7: gitmdict-to-sqlite ---', flush=True)
+    print('--- Step 6: gitmdict-to-sqlite ---', flush=True)
     run(script('gitmdict-to-sqlite.py'),
         '-i', gitmdict_dir,
         '--nedict', gitnedict_dir,
         '-o', output_dir)
 
-    print('--- Step 8: gitch-to-sqlite ---', flush=True)
-    run(script('gitch-to-sqlite.py'),
-        '-i', gitch_dir,
-        '-o', output_dir)
+    gitch_entries = os.path.join(gitch_dir, 'entries')
+    if os.path.isdir(gitch_entries):
+        print('--- Step 7: gitch-to-sqlite ---', flush=True)
+        run(script('gitch-to-sqlite.py'),
+            '-i', gitch_dir,
+            '-o', output_dir)
+    else:
+        print(f'--- Step 7: gitch-to-sqlite skipped (no gitch data at {gitch_dir}) ---',
+              flush=True)
 
     if os.path.isdir(gitoeba_dir):
         jmdict_path = os.path.join(output_dir, 'jmdict.db')
-        print('--- Step 9: gitoeba-to-sqlite ---', flush=True)
+        print('--- Step 8: gitoeba-to-sqlite ---', flush=True)
         run(script('gitoeba-to-sqlite.py'),
             '-i', gitoeba_dir,
             '-j', jmdict_path,
             '-o', output_dir)
     else:
-        print(f'--- Step 9: gitoeba-to-sqlite skipped ({gitoeba_dir} not found) ---',
+        print(f'--- Step 8: gitoeba-to-sqlite skipped ({gitoeba_dir} not found) ---',
               flush=True)
 
     print('Done.', flush=True)
