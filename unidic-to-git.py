@@ -50,23 +50,47 @@ import getopt
 import io
 import json
 import os
+import re
 import sys
 import unicodedata
 import urllib.error
 import urllib.request
 import zipfile
 
-# UniDic for Contemporary Written Japanese (ver. 3.1.0, 2023-02)
-# Check https://clrd.ninjal.ac.jp/unidic/en/ for newer releases.
-UNIDIC_URL = (
-    'https://clrd.ninjal.ac.jp'
-    '/unidic_archive/2302/unidic-cwj-202302.zip'
-)
+_NINJAL_BASE         = 'https://clrd.ninjal.ac.jp'
+_DOWNLOAD_PAGE       = _NINJAL_BASE + '/unidic/download.html'
+_FALLBACK_UNIDIC_URL = (_NINJAL_BASE + '/unidic_archive/2512/unidic-cwj-202512.zip')
+_CWJ_RE              = re.compile(r'/unidic_archive/\d+/unidic-cwj-\d+\.zip')
 
 # Column indices in the raw lex.csv (confirmed by tdmelodic/dic_index_map.py)
 _COL_SURFACE = 0
 _COL_PRON    = 13   # katakana; ー marks long vowels
 _COL_ATYPE   = 27   # comma-separated drop positions, '' if unlisted
+
+
+# ---------------------------------------------------------------------------
+# Version discovery
+# ---------------------------------------------------------------------------
+
+def discover_url():
+    """Return the download URL of the latest UniDic-cwj zip from the NINJAL page.
+
+    Falls back to _FALLBACK_UNIDIC_URL if the page cannot be fetched or parsed.
+    """
+    try:
+        with urllib.request.urlopen(_DOWNLOAD_PAGE, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='replace')
+        m = _CWJ_RE.search(html)
+        if m:
+            url = _NINJAL_BASE + m.group(0)
+            print(f'  Latest UniDic-cwj: {url}', flush=True)
+            return url
+        print('  Warning: could not find cwj link on download page; using fallback URL',
+              flush=True)
+    except Exception as exc:
+        print(f'  Warning: could not fetch download page ({exc}); using fallback URL',
+              flush=True)
+    return _FALLBACK_UNIDIC_URL
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +282,9 @@ def write_json(path, data):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process(output_dir, cache_dir, url):
+def process(output_dir, cache_dir, url=''):
+    if not url:
+        url = discover_url()
     zip_path = ensure_cached(url, cache_dir)
     print(f'  Using {zip_path}', flush=True)
 
@@ -309,14 +335,14 @@ def process(output_dir, cache_dir, url):
 HELP = (
     'usage: unidic-to-git.py -o <gitch directory>\n'
     '    [--cache <dir>]   download cache (default: ~/.cache/unidic)\n'
-    '    [--url   <url>]   override download URL (default: UniDic cwj 202302)'
+    '    [--url   <url>]   pin a specific zip URL (default: auto-discover latest from NINJAL)'
 )
 
 
 def main(argv):
     output_dir = ''
     cache_dir  = os.path.expanduser('~/.cache/unidic')
-    url        = UNIDIC_URL
+    url        = ''
     try:
         opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache=', 'url='])
     except getopt.GetoptError:
