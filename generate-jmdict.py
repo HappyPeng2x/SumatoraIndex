@@ -9,10 +9,11 @@ Dependency graph (→ = depends on):
     kanjidic2-to-git.py    →  gitjidic2/
     jmnedict-to-git.py     →  gitnedict/
     jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
-    [pitch-to-git.py]      →  gitch/          (when *.tsv found in --pitch-dir or --pitch-tsv given)
+    unidic-to-git.py       →  gitch/          (UniDic pitch data; always runs)
+    [pitch-to-git.py]      →  gitch/          (curated TSV; overwrites UniDic for same words)
     gitjidic2-to-sqlite.py →  kanjidic2.db
     gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitnedict/ for proper names)
-    [gitch-to-sqlite.py]   →  pitch.db        (when gitch/entries/ exists)
+    gitch-to-sqlite.py     →  pitch.db
     [gitoeba-to-sqlite.py] →  examples_{lang}.db    (when --gitoeba dir exists)
 
 Steps in brackets are optional and only execute when their prerequisite data
@@ -37,7 +38,7 @@ version.
 
 __author__ = "Nicolas Centa"
 __license__ = "GPLv3"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import getopt
 import glob
@@ -56,7 +57,8 @@ HELP = (
     '    [--pitch-dir  <dir>]   default: ~/Code/pitch  (scanned for *.tsv)\n'
     '    [--pitch-tsv  <file>]  repeatable; explicit pitch TSV (overrides --pitch-dir)\n'
     '    [--gitoeba    <dir>]   default: ~/Code/gitoeba\n'
-    '    [--cache      <dir>]   default: ~/.cache'
+    '    [--cache      <dir>]   default: ~/.cache\n'
+    '    [--unidic-url <url>]   override UniDic download URL'
 )
 
 
@@ -80,12 +82,13 @@ def main(argv):
     gitoeba_dir   = os.path.expanduser('~/Code/gitoeba')
     pitch_tsvs    = []
     cache_dir     = os.path.expanduser('~/.cache')
+    unidic_url    = ''
 
     try:
         opts, _ = getopt.getopt(
             argv, 'ho:',
             ['odir=', 'gitjidic2=', 'gitmdict=', 'gitnedict=', 'gitch=',
-             'pitch-dir=', 'gitoeba=', 'pitch-tsv=', 'cache='],
+             'pitch-dir=', 'gitoeba=', 'pitch-tsv=', 'cache=', 'unidic-url='],
         )
     except getopt.GetoptError:
         print(HELP)
@@ -113,6 +116,8 @@ def main(argv):
             pitch_tsvs.append(arg)
         elif opt == '--cache':
             cache_dir = arg
+        elif opt == '--unidic-url':
+            unidic_url = arg
 
     if not output_dir:
         print(HELP)
@@ -142,53 +147,55 @@ def main(argv):
         '--kanjidic2', gitjidic2_dir,
         '--cache', jmdict_cache)
 
+    print('--- Step 4: unidic-to-git ---', flush=True)
+    unidic_cache = os.path.join(cache_dir, 'unidic')
+    unidic_args = [script('unidic-to-git.py'), '-o', gitch_dir, '--cache', unidic_cache]
+    if unidic_url:
+        unidic_args += ['--url', unidic_url]
+    run(*unidic_args)
+
     if not pitch_tsvs and os.path.isdir(pitch_dir):
         pitch_tsvs = sorted(glob.glob(os.path.join(pitch_dir, '*.tsv')))
 
     if pitch_tsvs:
-        print('--- Step 4: pitch-to-git ---', flush=True)
+        print('--- Step 5: pitch-to-git (overwrites UniDic for curated words) ---', flush=True)
         pitch_args = [script('pitch-to-git.py')]
         for tsv in pitch_tsvs:
             pitch_args += ['-i', tsv]
         pitch_args += ['-o', gitch_dir]
         run(*pitch_args)
     else:
-        print(f'--- Step 4: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
+        print(f'--- Step 5: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
 
     # ------------------------------------------------------------------
     # Stage 2 — compile JSON repos to SQLite
     # ------------------------------------------------------------------
 
-    print('--- Step 5: gitjidic2-to-sqlite ---', flush=True)
+    print('--- Step 6: gitjidic2-to-sqlite ---', flush=True)
     run(script('gitjidic2-to-sqlite.py'),
         '-i', gitjidic2_dir,
         '-o', output_dir)
 
-    print('--- Step 6: gitmdict-to-sqlite ---', flush=True)
+    print('--- Step 7: gitmdict-to-sqlite ---', flush=True)
     run(script('gitmdict-to-sqlite.py'),
         '-i', gitmdict_dir,
         '--nedict', gitnedict_dir,
         '-o', output_dir)
 
-    gitch_entries = os.path.join(gitch_dir, 'entries')
-    if os.path.isdir(gitch_entries):
-        print('--- Step 7: gitch-to-sqlite ---', flush=True)
-        run(script('gitch-to-sqlite.py'),
-            '-i', gitch_dir,
-            '-o', output_dir)
-    else:
-        print(f'--- Step 7: gitch-to-sqlite skipped (no gitch data at {gitch_dir}) ---',
-              flush=True)
+    print('--- Step 8: gitch-to-sqlite ---', flush=True)
+    run(script('gitch-to-sqlite.py'),
+        '-i', gitch_dir,
+        '-o', output_dir)
 
     if os.path.isdir(gitoeba_dir):
         jmdict_path = os.path.join(output_dir, 'jmdict.db')
-        print('--- Step 8: gitoeba-to-sqlite ---', flush=True)
+        print('--- Step 9: gitoeba-to-sqlite ---', flush=True)
         run(script('gitoeba-to-sqlite.py'),
             '-i', gitoeba_dir,
             '-j', jmdict_path,
             '-o', output_dir)
     else:
-        print(f'--- Step 8: gitoeba-to-sqlite skipped ({gitoeba_dir} not found) ---',
+        print(f'--- Step 9: gitoeba-to-sqlite skipped ({gitoeba_dir} not found) ---',
               flush=True)
 
     print('Done.', flush=True)
