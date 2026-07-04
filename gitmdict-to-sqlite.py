@@ -80,7 +80,8 @@ class SumatoraDB:
     def create_jmdict_tables(self):
         c = self._jmcur
         for t in ('DictionaryEntry', 'DictionaryControl',
-                  'DictionaryIndex', 'DictionaryEntity'):
+                  'DictionaryIndex', 'DictionaryEntity',
+                  'ProperNounEntry', 'ProperNounIndex'):
             c.execute(f'DROP TABLE IF EXISTS {t}')
 
         c.execute(
