@@ -201,7 +201,7 @@ One row per JMnedict entry (people, places, organisations, etc.).
 |---|---|---|
 | `seq` | INTEGER PK | JMnedict sequence number |
 | `readings` | TEXT | Space-separated kana readings |
-| `writings` | TEXT | Space-separated kanji writings (may be NULL for kana-only names) |
+| `writings` | TEXT | Space-separated kanji writings; empty string `''` for kana-only names |
 | `types` | TEXT | JSON array of name type strings (see below) |
 | `translations` | TEXT | JSON array of translation strings |
 
@@ -274,20 +274,19 @@ One row per (entry, sentence) link.
 
 ### ExamplesSummary (VIEW)
 
-Aggregates `ExamplePairs` to one row per `(seq, sentence_id)` pair.
+Aggregates `ExamplePairs` to one row per `seq` (entry), collecting all sentences into parallel JSON arrays.
 
 ```sql
 CREATE VIEW ExamplesSummary AS
-SELECT seq,
-       sentence_id,
-       MAX(sentence)      AS sentence,
-       MAX(translation)   AS translation,
-       json_group_array(matched_token) AS matched_tokens
-FROM ExamplePairs
-GROUP BY seq, sentence_id
+    SELECT seq,
+           json_group_array(sentence)      AS sentences,
+           json_group_array(translation)   AS translations,
+           json_group_array(matched_token) AS matched_tokens
+    FROM ExamplePairs
+    GROUP BY seq
 ```
 
-`matched_tokens` is a JSON array of surface writing strings — the tokens that caused this sentence to be linked to the entry. Use it to highlight the relevant token(s) in the rendered sentence.
+`sentences`, `translations`, and `matched_tokens` are parallel JSON arrays of the same length: `sentences[i]` is paired with `translations[i]`, and `matched_tokens[i]` is the surface writing of the token that linked that specific sentence to the entry.
 
 ---
 
@@ -302,7 +301,7 @@ One row per kanji character.
 | Column | Type | Description |
 |---|---|---|
 | `char` | TEXT PK | Single kanji character |
-| `on` | TEXT | Space-separated on readings (katakana) |
+| `"on"` | TEXT | Space-separated on readings (katakana) — column name is SQL-quoted because `on` is a reserved word |
 | `kun` | TEXT | Space-separated kun readings (hiragana; okurigana after `.`) |
 | `meanings` | TEXT | JSON array of English meaning strings |
 | `strokes` | INTEGER | Stroke count (NULL if absent) |

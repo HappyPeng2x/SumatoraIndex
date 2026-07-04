@@ -184,24 +184,31 @@ complex part and must be implemented separately in the app.
 
 ### Gap 7 — Token highlighting in Tatoeba examples
 
-`ExamplesSummary` now includes a `matched_tokens` column:
+`ExamplesSummary` is a view that groups by `seq`, returning one row per entry
+with three parallel JSON arrays:
 
 ```sql
-json_group_array(matched_token) AS matched_tokens
+SELECT seq,
+       json_group_array(sentence)      AS sentences,
+       json_group_array(translation)   AS translations,
+       json_group_array(matched_token) AS matched_tokens
+FROM ExamplePairs
+GROUP BY seq
 ```
 
-`matched_tokens` is a JSON array of surface writing strings — the tokens within
-the sentence that caused it to be linked to the entry.
+`sentences[i]`, `translations[i]`, and `matched_tokens[i]` are always
+co-indexed: `matched_tokens[i]` is the surface writing of the token that caused
+`sentences[i]` to be linked to the entry.
 
 **App changes:**
 
-1. Read `matched_tokens` from the `ExamplesSummary` query result and
-   deserialize as `List<String>`.
-2. In the example sentence renderer, after applying furigana spans, apply an
-   additional bold or highlight span to each occurrence of a string in
-   `matched_tokens` within the Japanese sentence text.
-3. The match should be a simple substring search against the rendered sentence
-   string (without furigana interleaving).
+1. Deserialize `sentences`, `translations`, and `matched_tokens` as parallel
+   `List<String>`.
+2. Iterate by index `i` to render each `sentences[i]` / `translations[i]` pair.
+3. In the renderer for `sentences[i]`, after applying furigana spans, apply an
+   additional bold or highlight span to the substring matching `matched_tokens[i]`.
+   The match is a simple substring search against the sentence text (without
+   furigana interleaving).
 
 Affected code: example sentence rendering in `EntryDetailBottomSheet` (or
 equivalent).
