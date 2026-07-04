@@ -9,12 +9,14 @@ Dependency graph (→ = depends on):
     kanjidic2-to-git.py    →  gitjidic2/
     jmnedict-to-git.py     →  gitnedict/
     jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
-    unidic-to-git.py       →  gitch/          (UniDic pitch from installed pip package)
+    unidic-to-git.py       →  gitch/          (also leaves a MeCab dicdir in the
+                                                unidic cache dir, used below)
     [pitch-to-git.py]      →  gitch/          (curated TSV; overwrites UniDic for same words)
     gitjidic2-to-sqlite.py →  kanjidic2.db
     gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitnedict/ for proper names)
     gitch-to-sqlite.py     →  pitch.db
-    [gitoeba-to-sqlite.py] →  examples_{lang}.db    (when --gitoeba dir exists)
+    [gitoeba-to-sqlite.py] →  examples_{lang}.db    (when --gitoeba dir exists;
+                                                       tokenizes with the unidic dicdir)
 
 Steps in brackets are optional and only execute when their prerequisite data
 is present.
@@ -186,6 +188,7 @@ def main(argv):
         run(script('gitoeba-to-sqlite.py'),
             '-i', gitoeba_dir,
             '-j', jmdict_path,
+            '-u', unidic_cache,
             '-o', output_dir)
     else:
         print(f'--- Step 9: gitoeba-to-sqlite skipped ({gitoeba_dir} not found) ---',

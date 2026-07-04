@@ -268,7 +268,7 @@ One row per (entry, sentence) link.
 |---|---|---|
 | `seq` | INTEGER | JMdict sequence number |
 | `sentence_id` | INTEGER | Tatoeba sentence ID |
-| `sentence` | TEXT | Japanese sentence text (with `{expression;reading}` furigana markup) |
+| `sentence` | TEXT | Japanese sentence text (with `{expression;reading}` furigana markup, covering every kanji in the sentence — see §14 in Algorithms.md) |
 | `translation` | TEXT | Translation in the target language |
 | `matched_token` | TEXT | Surface writing of the token that caused this sentence to be linked to the entry |
 
@@ -420,7 +420,7 @@ python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv --gitoeba ~/Cod
 | 1 | `kanjidic2-to-git.py` | yes |
 | 2 | `jmnedict-to-git.py` | yes |
 | 3 | `jmdict-to-git.py` | yes |
-| 4 | `unidic-to-git.py` | yes — downloads UniDic from NINJAL, cached in `~/.cache/unidic/` |
+| 4 | `unidic-to-git.py` | yes — downloads UniDic from NINJAL, cached as a MeCab dicdir in `~/.cache/unidic/` |
 | 5 | `pitch-to-git.py` | only when `*.tsv` files are found in `--pitch-dir` or via `--pitch-tsv` |
 | 6 | `gitjidic2-to-sqlite.py` | yes |
 | 7 | `gitmdict-to-sqlite.py` | yes |
@@ -446,14 +446,19 @@ python3 pitch-to-git.py     -i pitch_data.tsv    -o ~/Code/gitch/   # optional o
 python3 gitjidic2-to-sqlite.py -i ~/Code/gitjidic2/ -o output/
 python3 gitmdict-to-sqlite.py  -i ~/Code/gitmdict/  --nedict ~/Code/gitnedict/ -o output/
 python3 gitch-to-sqlite.py     -i ~/Code/gitch/      -o output/
-python3 gitoeba-to-sqlite.py   -i ~/Code/gitoeba/    -j output/jmdict.db -o output/  # optional
+python3 gitoeba-to-sqlite.py   -i ~/Code/gitoeba/    -j output/jmdict.db -u ~/.cache/unidic -o output/  # optional
 ```
 
 `unidic-to-git.py` downloads `unidic-cwj-YYYYMM.zip` from
 `https://clrd.ninjal.ac.jp/unidic/download.html` (auto-discovers the latest
-release), extracts `sys.dic` (~243 MB cached), and discards the zip.
-Subsequent runs use a conditional GET and only re-download when NINJAL publishes
-a new version.
+release), extracts the five files a working MeCab dictionary needs — `sys.dic`,
+`matrix.bin`, `char.bin`, `unk.dic`, `dicrc` (~1.3 GB cached, `matrix.bin`
+alone accounts for most of it) — and discards the zip. Subsequent runs use a
+conditional GET and only re-download when NINJAL publishes a new version.
+The cache dir doubles as the `-u` dicdir for `gitoeba-to-sqlite.py`, which
+tokenizes each Tatoeba sentence with MeCab (via `fugashi`) to generate
+furigana covering every kanji in the sentence, not just the ones covered by
+Tatoeba's own manually-curated B-line annotations.
 
 `pitch-to-git.py` does not download anything — supply your own TSV data.  When
 run after `unidic-to-git.py`, its entries overwrite UniDic data for the same

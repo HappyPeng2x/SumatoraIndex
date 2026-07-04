@@ -553,16 +553,110 @@ def markup_sentence(text, indices):
 ```
 
 Tokens are applied left to right.  If a token's expression is not found in the
-remaining (unprocessed) sentence text it is silently skipped — this handles
-cases where Tatoeba's B-line annotations do not align exactly with the sentence
-text (e.g. due to punctuation or tokenisation differences).
+remaining (unprocessed) sentence text it is silently skipped.
 
 `_has_kanji` tests the CJK Unified Ideographs range (U+4E00–U+9FFF) plus CJK
 Radicals Supplement and Extension A/B.
 
+`indices` is generic — this function does not care where tokens come from.
+Historically it was fed Tatoeba's own B-line annotations directly, which meant
+furigana only appeared on words a Tatoeba contributor had manually indexed and
+verified; kanji outside that manually-annotated subset, and entire sentences
+with no B-line data at all, were left unmarked. §15 replaces that token source
+with full MeCab tokenization, so `markup_sentence` itself needed no changes —
+only what gets passed in as `indices` changed. The original B-line `indices`
+are still used unchanged for JMdict seq resolution (§13); that's a distinct
+concern (which dictionary entries a sentence should link to) from furigana
+display coverage.
+
 ---
 
-## 15 — Pitch accent data merging
+## 15 — MeCab tokenization for full-sentence furigana
+
+**File:** `gitoeba-to-sqlite.py`  
+**Class/Functions:** `MecabTokenizer`, `_reading_of`
+
+Rather than depending on Tatoeba's partial B-line annotations for furigana
+coverage, every sentence is tokenized directly with MeCab (via the `fugashi`
+binding) against the UniDic dictionary directory produced by
+`unidic-to-git.py`. Every morpheme MeCab finds — not just the ones a Tatoeba
+contributor happened to annotate — becomes a candidate for a furigana span.
+
+```python
+_KANA_COL = 20
+
+def _reading_of(word):
+    feature = word.feature
+    if len(feature) <= _KANA_COL:
+        return None
+    kana = feature[_KANA_COL]
+    if not kana or kana == '*':
+        return None
+    return _kata_to_hira(kana)
+
+class MecabTokenizer:
+    def __init__(self, dicdir):
+        self._tagger = fugashi.GenericTagger(f'-d {dicdir} -r /dev/null')
+
+    def tokenize(self, text):
+        tokens = []
+        for word in self._tagger(text):
+            tok = {'writing': word.surface}
+            reading = _reading_of(word)
+            if reading:
+                tok['reading'] = reading
+            tokens.append(tok)
+        return tokens
+```
+
+### Which UniDic feature is "the reading"
+
+UniDic's 29-field schema has two katakana reading fields that read
+differently for the same word:
+
+| Field | Index | Example (東京) | Reflects |
+|---|---|---|---|
+| `pron` | 9 | トーキョー | Phonetic pronunciation (vowel lengthening, devoicing, etc.) |
+| `kana` | 20 | トウキョウ | Orthographic reading, spelled out as written |
+
+Conventional furigana uses the orthographic form — nobody writes 東京's ruby
+as とーきょー. `unk.dic`'s output format and most MeCab tutorials default to
+`pron` (field 9), which would produce furigana with stray `ー` marks that
+don't match how the word is actually spelled in kana. Field 20 was confirmed
+empirically against `sys.dic` (e.g. 西東京 → pron `ニシトーキョー` vs.
+kana `ニシトウキョウ`) and cross-checked against UniDic's published field
+list; see `unidic-to-git.py`'s module docstring for the same table with the
+pitch-accent field (`aType`, index 24) included.
+
+### Coverage and fallback
+
+`_reading_of` returns `None` (leaving that span unmarked, same as
+`markup_sentence`'s existing behaviour) for:
+
+- **Unknown words** — text MeCab can't match against the dictionary (numbers,
+  rare proper nouns). These come back with a short feature tuple from
+  `unk.dic`'s output format, with no field 20 to read.
+- **Symbols and punctuation** — `kana` is the literal string `*`.
+
+Because MeCab's surfaces are emitted in order and exactly reconstitute the
+input sentence, `markup_sentence`'s left-to-right substring search always
+succeeds immediately (the next token is always the head of what remains) —
+unlike the old B-line-driven approach, there is no possibility of a token
+being silently skipped for failing to align with the sentence text.
+
+### Dictionary directory
+
+`unidic-to-git.py` already downloads UniDic from NINJAL for pitch accent data
+(§ pitch.db in Database.md) and, since the dicdir-extraction change described
+in its module docstring, extracts the full set of files a MeCab dictionary
+needs (`sys.dic`, `matrix.bin`, `char.bin`, `unk.dic`, `dicrc`) rather than
+just `sys.dic`. The resulting cache directory is passed to
+`gitoeba-to-sqlite.py` via `-u`/`--unidic` and used directly as MeCab's `-d`
+dicdir — no separate download or model conversion needed for tokenization.
+
+---
+
+## 16 — Pitch accent data merging
 
 **File:** `pitch-to-git.py`  
 **Functions:** `parse_tsv`, `_parse_pitches`, `process`

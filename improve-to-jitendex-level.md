@@ -14,7 +14,7 @@
 | FTS5 forward search (exact → prefix → substring, kana + kanji) | `DictionaryIndex` with 8 columns — matches |
 | Per-language translation tables + FTS5 reverse search | `DictionaryTranslation` + `DictionaryTranslationIndex` — matches |
 | Tatoeba sentences linked to entries | `ExamplePairs` / `ExamplesSummary` view — present |
-| Tatoeba sentence furigana markup | `{expression;reading}` token markup in `gitoeba-to-sqlite.py` — accurate (uses Tatoeba's own token annotations, not the ignorant solver) |
+| Tatoeba sentence furigana markup | `{expression;reading}` token markup in `gitoeba-to-sqlite.py` — full coverage via MeCab/UniDic tokenization (Algorithms.md §15), not limited to Tatoeba's own token annotations |
 | Furigana for kanji headword display (basic) | `DictionaryEntry.furigana` in bracket notation — present but limited |
 
 ---

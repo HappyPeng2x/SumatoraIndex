@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
 """Download the UniDic binary archive and extract pitch accent data.
 
-Downloads the UniDic-cwj zip from NINJAL, extracts sys.dic from it (the
-zip is discarded afterwards; only sys.dic is kept in the cache), reads the
-feature section of sys.dic to extract pitch accent annotations, and writes
-the data to a gitch JSON repository.
+Downloads the UniDic-cwj zip from NINJAL and extracts the five files that
+make up a working MeCab dictionary directory (sys.dic, matrix.bin, char.bin,
+unk.dic, dicrc) into the cache dir; the zip itself is discarded afterwards.
+Reads the feature section of sys.dic to extract pitch accent annotations and
+writes the data to a gitch JSON repository. The cache dir doubles as the
+dictionary directory MeCab/fugashi tokenization needs (see
+gitoeba-to-sqlite.py's -u flag) — nothing extra to download for that.
 
-The regular (non-_full) zip is used (~570 MB download, ~243 MB cached sys.dic)
-rather than the _full archive (2.8 GB), because the binary contains all the
-pitch data we need and is far smaller than the source lex.csv distribution.
+The regular (non-_full) zip is used (~570 MB download) rather than the _full
+archive (2.8 GB), because it contains everything we need and is far smaller
+than the source lex.csv distribution. The extracted dictionary directory is
+~1.3 GB — matrix.bin (the connection cost matrix between UniDic's ~24k×21k
+left/right context IDs) dwarfs sys.dic itself.
 
 UniDic is distributed by NINJAL under a GPL v2.0 / LGPL v2.1 / BSD New
 triple licence — compatible with GPLv3 and AGPLv3.
 
-Feature field positions inside sys.dic (determined empirically):
+Feature field positions inside sys.dic (confirmed against the UniDic 29-field
+schema and empirically cross-checked, see Algorithms.md):
     8  orth   written form (kanji or kana as it appears in running text)
-    9  pron   pronunciation in katakana (ー marks long vowels)
+    9  pron   phonetic pronunciation in katakana (ー marks long vowels,
+              reflects sound changes e.g. 東京 → トーキョー)
+    20 kana   orthographic reading in katakana, no phonetic contraction
+              (e.g. 東京 → トウキョウ) — this is the field furigana wants
     24 aType  pitch accent drop position(s); CSV-quoted when multi-valued
 
 The aType field is stored with CSV quoting when it contains commas (e.g.
@@ -75,6 +84,9 @@ _COL_ORTH  = 8    # written form (kanji/kana)
 _COL_PRON  = 9    # katakana pronunciation
 _COL_ATYPE = 24   # pitch drop position(s); CSV-quoted when multi-valued
 
+# The five files a MeCab dictionary directory needs at minimum.
+_DICT_FILES = ('sys.dic', 'matrix.bin', 'char.bin', 'unk.dic', 'dicrc')
+
 
 # ---------------------------------------------------------------------------
 # URL discovery
@@ -129,35 +141,34 @@ def _stream_zip_to_file(resp, dest):
     return saved
 
 
-def _extract_sysdic(zip_path, dest):
-    """Extract sys.dic from zip_path and write it atomically to dest."""
-    print('  Extracting sys.dic from zip…', flush=True)
+def _extract_dict_files(zip_path, dest_dir):
+    """Extract the MeCab dictionary files (_DICT_FILES) from zip_path into dest_dir."""
+    print('  Extracting dictionary files from zip…', flush=True)
     with zipfile.ZipFile(zip_path, 'r') as zf:
-        name = next(
-            (n for n in zf.namelist() if os.path.basename(n) == 'sys.dic'),
-            None,
-        )
-        if name is None:
-            print('Error: sys.dic not found in archive', file=sys.stderr)
-            sys.exit(1)
-        tmp = dest + '.tmp'
-        try:
-            with zf.open(name) as src, open(tmp, 'wb') as out:
-                while True:
-                    chunk = src.read(65536)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-            os.replace(tmp, dest)
-        except Exception:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
+        names = {os.path.basename(n): n for n in zf.namelist()}
+        for fname in _DICT_FILES:
+            name = names.get(fname)
+            if name is None:
+                print(f'Error: {fname} not found in archive', file=sys.stderr)
+                sys.exit(1)
+            dest = os.path.join(dest_dir, fname)
+            tmp = dest + '.tmp'
+            try:
+                with zf.open(name) as src, open(tmp, 'wb') as out:
+                    while True:
+                        chunk = src.read(65536)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                os.replace(tmp, dest)
+            except Exception:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
 
 
 def _download_and_extract(url, cache_dir, resp=None):
-    """Download zip (or use open resp), extract sys.dic, discard zip, save headers."""
-    sysdic_path  = os.path.join(cache_dir, 'sys.dic')
+    """Download zip (or use open resp), extract dict files, discard zip, save headers."""
     headers_path = os.path.join(cache_dir, 'sys.dic.headers')
     tmp_zip      = os.path.join(cache_dir, '_download.zip.tmp')
     try:
@@ -167,7 +178,7 @@ def _download_and_extract(url, cache_dir, resp=None):
             print(f'  Downloading {url} …', flush=True)
             with urllib.request.urlopen(url) as r:
                 saved = _stream_zip_to_file(r, tmp_zip)
-        _extract_sysdic(tmp_zip, sysdic_path)
+        _extract_dict_files(tmp_zip, cache_dir)
         with open(headers_path, 'w') as f:
             json.dump(saved, f)
     finally:
@@ -175,24 +186,26 @@ def _download_and_extract(url, cache_dir, resp=None):
             os.unlink(tmp_zip)
 
 
-def ensure_sysdic(url, cache_dir):
-    """Return path to a cached sys.dic, refreshing from NINJAL when the zip has changed.
+def ensure_dicdir(url, cache_dir):
+    """Return cache_dir populated with a working MeCab dictionary, refreshing from
+    NINJAL when the zip has changed.
 
-    Cache layout (cache_dir/):
-        sys.dic           — extracted binary dictionary
-        sys.dic.headers   — ETag / Last-Modified from the last zip download
+    Cache layout (cache_dir/), all extracted straight from the NINJAL zip:
+        sys.dic, matrix.bin, char.bin, unk.dic, dicrc  — MeCab dictionary files
+        sys.dic.headers                                — ETag / Last-Modified
+                                                           from the last zip download
 
-    The zip itself is never kept; it is downloaded to a temp file, sys.dic is
-    extracted, and the zip is deleted.  This keeps the persistent cache at
-    ~243 MB rather than ~813 MB.
+    cache_dir itself is a valid MeCab dicdir (`-d cache_dir`), ready for
+    fugashi/MeCab tokenization as well as the pitch extraction below. The zip
+    itself is never kept; it is downloaded to a temp file, the dictionary
+    files are extracted, and the zip is deleted.
     """
     os.makedirs(cache_dir, exist_ok=True)
-    sysdic_path  = os.path.join(cache_dir, 'sys.dic')
     headers_path = os.path.join(cache_dir, 'sys.dic.headers')
 
-    if not os.path.exists(sysdic_path):
+    if not all(os.path.exists(os.path.join(cache_dir, f)) for f in _DICT_FILES):
         _download_and_extract(url, cache_dir)
-        return sysdic_path
+        return cache_dir
 
     saved = {}
     if os.path.exists(headers_path):
@@ -200,9 +213,9 @@ def ensure_sysdic(url, cache_dir):
             saved = json.load(f)
 
     if not saved:
-        print('  Using cached sys.dic (no validators; delete to force refresh)',
+        print('  Using cached dictionary (no validators; delete to force refresh)',
               flush=True)
-        return sysdic_path
+        return cache_dir
 
     req = urllib.request.Request(url)
     if saved.get('etag'):
@@ -220,7 +233,7 @@ def ensure_sysdic(url, cache_dir):
         else:
             raise
 
-    return sysdic_path
+    return cache_dir
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +323,8 @@ def write_json(path, data):
 # ---------------------------------------------------------------------------
 
 def process(output_dir, cache_dir, url):
-    sysdic_path = ensure_sysdic(url, cache_dir)
+    dicdir = ensure_dicdir(url, cache_dir)
+    sysdic_path = os.path.join(dicdir, 'sys.dic')
 
     merged = {}  # word → {reading → set of pitch positions}
 
