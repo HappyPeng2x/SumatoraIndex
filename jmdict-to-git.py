@@ -189,30 +189,35 @@ def build_knowledge(gitjidic2_dir):
 # Informed partition solver for consecutive kanji runs
 # ---------------------------------------------------------------------------
 
-def _partitions(s, k):
-    """Yield all tuples of k non-empty strings whose concatenation equals s."""
-    if k == 1:
-        if s:
-            yield (s,)
-        return
-    for i in range(1, len(s) - k + 2):
-        for rest in _partitions(s[i:], k - 1):
-            yield (s[:i],) + rest
-
-
 def _split_kanji_run(run, reading, knowledge):
     """Try to assign one reading per character in run using knowledge.
 
-    Returns a tuple of per-character readings when exactly one valid partition
+    Returns a tuple of per-character readings when exactly one valid assignment
     exists; returns None when the split is impossible or ambiguous.
     Only called for multi-character runs (len(run) >= 2).
+
+    Uses constrained backtracking: at each position only the known readings for
+    that character are tried, so the search prunes aggressively compared to
+    enumerating all C(len(reading)-1, len(run)-1) partitions.
     """
     n = len(run)
-    valid = set()
-    for parts in _partitions(reading, n):
-        if all(parts[i] in knowledge.get(run[i], frozenset()) for i in range(n)):
-            valid.add(parts)
-    return next(iter(valid)) if len(valid) == 1 else None
+    found = []
+
+    def search(char_idx, pos, current):
+        if char_idx == n:
+            if pos == len(reading):
+                found.append(tuple(current))
+            return len(found) < 2          # stop once ambiguous
+        for stem in knowledge.get(run[char_idx], ()):
+            if reading.startswith(stem, pos):
+                current.append(stem)
+                if not search(char_idx + 1, pos + len(stem), current):
+                    return False
+                current.pop()
+        return True
+
+    search(0, 0, [])
+    return found[0] if len(found) == 1 else None
 
 
 def _parse_segments(text):
