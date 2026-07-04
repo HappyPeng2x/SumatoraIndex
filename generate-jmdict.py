@@ -9,7 +9,7 @@ Dependency graph (→ = depends on):
     kanjidic2-to-git.py    →  gitjidic2/
     jmnedict-to-git.py     →  gitnedict/
     jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
-    unidic-to-git.py       →  gitch/          (UniDic pitch data; always runs)
+    unidic-to-git.py       →  gitch/          (UniDic pitch from installed pip package)
     [pitch-to-git.py]      →  gitch/          (curated TSV; overwrites UniDic for same words)
     gitjidic2-to-sqlite.py →  kanjidic2.db
     gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitnedict/ for proper names)
@@ -57,8 +57,7 @@ HELP = (
     '    [--pitch-dir  <dir>]   default: ~/Code/pitch  (scanned for *.tsv)\n'
     '    [--pitch-tsv  <file>]  repeatable; explicit pitch TSV (overrides --pitch-dir)\n'
     '    [--gitoeba    <dir>]   default: ~/Code/gitoeba\n'
-    '    [--cache      <dir>]   default: ~/.cache\n'
-    '    [--unidic-url <url>]   override UniDic download URL'
+    '    [--cache      <dir>]   default: ~/.cache'
 )
 
 
@@ -82,13 +81,12 @@ def main(argv):
     gitoeba_dir   = os.path.expanduser('~/Code/gitoeba')
     pitch_tsvs    = []
     cache_dir     = os.path.expanduser('~/.cache')
-    unidic_url    = ''
 
     try:
         opts, _ = getopt.getopt(
             argv, 'ho:',
             ['odir=', 'gitjidic2=', 'gitmdict=', 'gitnedict=', 'gitch=',
-             'pitch-dir=', 'gitoeba=', 'pitch-tsv=', 'cache=', 'unidic-url='],
+             'pitch-dir=', 'gitoeba=', 'pitch-tsv=', 'cache='],
         )
     except getopt.GetoptError:
         print(HELP)
@@ -116,8 +114,6 @@ def main(argv):
             pitch_tsvs.append(arg)
         elif opt == '--cache':
             cache_dir = arg
-        elif opt == '--unidic-url':
-            unidic_url = arg
 
     if not output_dir:
         print(HELP)
@@ -148,11 +144,7 @@ def main(argv):
         '--cache', jmdict_cache)
 
     print('--- Step 4: unidic-to-git ---', flush=True)
-    unidic_cache = os.path.join(cache_dir, 'unidic')
-    unidic_args = [script('unidic-to-git.py'), '-o', gitch_dir, '--cache', unidic_cache]
-    if unidic_url:
-        unidic_args += ['--url', unidic_url]
-    run(*unidic_args)
+    run(script('unidic-to-git.py'), '-o', gitch_dir)
 
     if not pitch_tsvs and os.path.isdir(pitch_dir):
         pitch_tsvs = sorted(glob.glob(os.path.join(pitch_dir, '*.tsv')))
