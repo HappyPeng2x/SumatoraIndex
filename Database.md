@@ -394,26 +394,55 @@ Apply the same tier strategy to `ProperNounIndex` for proper name lookup, and di
 
 ## Building the databases
 
+### Full build (recommended)
+
 ```sh
-# Full build (recommended): kanjidic2 first, then jmdict with informed furigana
-python3 generate-jmdict.py -o gitmdict/ [--kanjidic2-dir gitjidic2/] [--cache ~/.cache]
+# All databases except examples and pitch (which need external data):
+python3 generate-jmdict.py -o output/
 
-# Or step by step:
-python3 kanjidic2-to-git.py -o gitjidic2/ [--cache ~/.cache/kanjidic2]
-python3 jmdict-to-git.py   -o gitmdict/  [--kanjidic2 gitjidic2/] [--cache ~/.cache/jmdict]
-python3 jmnedict-to-git.py -o gitndict/  [--cache ~/.cache/jmnedict]
+# With pitch accent data:
+python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv
 
-python3 gitmdict-to-sqlite.py -i gitmdict/ -o output/ [--nedict gitndict/]
-python3 gitjidic2-to-sqlite.py -i gitjidic2/ -o output/
-python3 gitoeba-to-sqlite.py  [options]
+# With Tatoeba example sentences:
+python3 generate-jmdict.py -o output/ --gitoeba ~/Code/gitoeba/
 
-# Pitch accent (requires a user-supplied TSV file):
-python3 pitch-to-git.py     -i pitch_data.tsv -o ~/Code/gitch/
-python3 gitpitch-to-sqlite.py -i ~/Code/gitch/ -o output/
+# Full build with everything:
+python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv --gitoeba ~/Code/gitoeba/
 ```
 
-`jmdict-to-git.py` and `jmnedict-to-git.py` download their source XML automatically (cached locally). `kanjidic2-to-git.py` also downloads automatically. `pitch-to-git.py` does not download anything — supply your own TSV data.
+`generate-jmdict.py` runs all steps in dependency order.  Intermediate JSON
+repos are written to `~/Code/gitjidic2/`, `~/Code/gitmdict/`,
+`~/Code/gitndict/`, and `~/Code/gitch/` by default (override with
+`--gitjidic2`, `--gitmdict`, `--gitndict`, `--gitch`).  Downloads are cached
+in `~/.cache/` (override with `--cache`).
 
-Curated entry corrections can be placed in `patches/entries/{shard}/{seq}.json` as RFC 7396 JSON Merge Patches; they are applied automatically during `jmdict-to-git.py`.
+The pitch step is skipped when no `--pitch-tsv` is given but runs automatically
+if `~/Code/gitch/entries/` already exists from a previous run.
+The examples step is skipped unless `--gitoeba` is given.
 
-Output files: `output/jmdict.db`, `output/eng.db`, `output/ger.db`, …, `output/kanjidic2.db`, `output/pitch.db`.
+### Step by step
+
+```sh
+# Stage 1 — JSON repos (git-friendly intermediate data)
+python3 kanjidic2-to-git.py  -o ~/Code/gitjidic2/ [--cache ~/.cache/kanjidic2]
+python3 jmnedict-to-git.py   -o ~/Code/gitndict/  [--cache ~/.cache/jmnedict]
+python3 jmdict-to-git.py     -o ~/Code/gitmdict/  --kanjidic2 ~/Code/gitjidic2/ [--cache ~/.cache/jmdict]
+python3 pitch-to-git.py      -i pitch_data.tsv    -o ~/Code/gitch/
+
+# Stage 2 — SQLite databases
+python3 gitjidic2-to-sqlite.py  -i ~/Code/gitjidic2/ -o output/
+python3 gitmdict-to-sqlite.py   -i ~/Code/gitmdict/  --nedict ~/Code/gitndict/ -o output/
+python3 gitpitch-to-sqlite.py   -i ~/Code/gitch/     -o output/
+python3 gitoeba-to-sqlite.py    -i ~/Code/gitoeba/   -j output/jmdict.db -o output/
+```
+
+`kanjidic2-to-git.py`, `jmdict-to-git.py`, and `jmnedict-to-git.py` download
+their source XML automatically (cached locally).  `pitch-to-git.py` does not
+download anything — supply your own TSV data.
+
+Curated entry corrections can be placed in `patches/entries/{shard}/{seq}.json`
+as RFC 7396 JSON Merge Patches; they are applied automatically during
+`jmdict-to-git.py`.
+
+Output files: `output/jmdict.db`, `output/eng.db`, `output/ger.db`, …,
+`output/kanjidic2.db`, `output/pitch.db`, `output/examples_eng.db`, …

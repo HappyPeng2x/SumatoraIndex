@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
-"""Generate gitjidic2 then gitmdict, satisfying the kanjidic2 → jmdict dependency.
+"""Orchestrate the full Sumatora dictionary build pipeline.
 
-Runs kanjidic2-to-git.py first (idempotent — skips download if cached), then
-jmdict-to-git.py with --kanjidic2 pointing at the freshly written gitjidic2
-directory so the informed furigana solver is active.
+Runs all pipeline steps in dependency order, producing the complete set of
+SQLite databases from downloadable and user-supplied source data.
+
+Dependency graph (→ = depends on):
+
+    kanjidic2-to-git.py    →  gitjidic2/
+    jmnedict-to-git.py     →  gitndict/
+    jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
+    [pitch-to-git.py]      →  gitch/          (only when --pitch-tsv is given)
+    gitjidic2-to-sqlite.py →  kanjidic2.db
+    gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitndict/ for proper names)
+    [gitpitch-to-sqlite.py]→  pitch.db        (only when gitch/entries/ exists)
+    [gitoeba-to-sqlite.py] →  examples_{lang}.db    (only when --gitoeba is given)
+
+Steps in brackets are optional and only execute when their prerequisite data
+is present.
 
 Usage:
-    generate-jmdict.py -o <gitmdict output dir>
-                       [--kanjidic2-dir <gitjidic2 dir>]   default: ~/Code/gitjidic2
-                       [--cache <cache dir>]                default: ~/.cache
-
-Downloads are cached; delete the cache files to force a fresh download.
+    generate-jmdict.py -o <sqlite output dir>
+        [--gitjidic2  <dir>]   intermediate kanjidic2 JSON repo  (default: ~/Code/gitjidic2)
+        [--gitmdict   <dir>]   intermediate jmdict JSON repo      (default: ~/Code/gitmdict)
+        [--gitndict   <dir>]   intermediate jmnedict JSON repo    (default: ~/Code/gitndict)
+        [--gitch      <dir>]   intermediate pitch JSON repo       (default: ~/Code/gitch)
+        [--gitoeba    <dir>]   Tatoeba JSON corpus; triggers examples pipeline
+        [--pitch-tsv  <file>]  repeatable; triggers pitch-to-git step
+        [--cache      <dir>]   download cache root                (default: ~/.cache)
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -20,7 +36,7 @@ version.
 
 __author__ = "Nicolas Centa"
 __license__ = "GPLv3"
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import getopt
 import os
@@ -28,14 +44,21 @@ import subprocess
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_KANJIDIC2_DIR = os.path.expanduser('~/Code/gitjidic2')
-DEFAULT_CACHE_DIR = os.path.expanduser('~/.cache')
 
 HELP = (
-    'usage: generate-jmdict.py -o <gitmdict dir> '
-    '[--kanjidic2-dir <gitjidic2 dir>] [--kanjidic2-db <output dir>] '
-    '[--cache <cache dir>]'
+    'usage: generate-jmdict.py -o <sqlite output dir>\n'
+    '    [--gitjidic2  <dir>]   default: ~/Code/gitjidic2\n'
+    '    [--gitmdict   <dir>]   default: ~/Code/gitmdict\n'
+    '    [--gitndict   <dir>]   default: ~/Code/gitndict\n'
+    '    [--gitch      <dir>]   default: ~/Code/gitch\n'
+    '    [--gitoeba    <dir>]   triggers examples pipeline\n'
+    '    [--pitch-tsv  <file>]  repeatable; triggers pitch-to-git step\n'
+    '    [--cache      <dir>]   default: ~/.cache'
 )
+
+
+def script(name):
+    return os.path.join(SCRIPT_DIR, name)
 
 
 def run(*args):
@@ -45,28 +68,43 @@ def run(*args):
 
 
 def main(argv):
-    output_dir = ''
-    kanjidic2_dir = DEFAULT_KANJIDIC2_DIR
-    kanjidic2_db_dir = None
-    cache_dir = DEFAULT_CACHE_DIR
+    output_dir   = ''
+    gitjidic2_dir = os.path.expanduser('~/Code/gitjidic2')
+    gitmdict_dir  = os.path.expanduser('~/Code/gitmdict')
+    gitndict_dir  = os.path.expanduser('~/Code/gitndict')
+    gitch_dir     = os.path.expanduser('~/Code/gitch')
+    gitoeba_dir   = None
+    pitch_tsvs    = []
+    cache_dir     = os.path.expanduser('~/.cache')
+
     try:
         opts, _ = getopt.getopt(
             argv, 'ho:',
-            ['odir=', 'kanjidic2-dir=', 'kanjidic2-db=', 'cache='],
+            ['odir=', 'gitjidic2=', 'gitmdict=', 'gitndict=', 'gitch=',
+             'gitoeba=', 'pitch-tsv=', 'cache='],
         )
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
+
     for opt, arg in opts:
         if opt == '-h':
             print(HELP)
             sys.exit()
         elif opt in ('-o', '--odir'):
             output_dir = arg
-        elif opt == '--kanjidic2-dir':
-            kanjidic2_dir = arg
-        elif opt == '--kanjidic2-db':
-            kanjidic2_db_dir = arg
+        elif opt == '--gitjidic2':
+            gitjidic2_dir = arg
+        elif opt == '--gitmdict':
+            gitmdict_dir = arg
+        elif opt == '--gitndict':
+            gitndict_dir = arg
+        elif opt == '--gitch':
+            gitch_dir = arg
+        elif opt == '--gitoeba':
+            gitoeba_dir = arg
+        elif opt == '--pitch-tsv':
+            pitch_tsvs.append(arg)
         elif opt == '--cache':
             cache_dir = arg
 
@@ -75,28 +113,73 @@ def main(argv):
         sys.exit(2)
 
     kanjidic2_cache = os.path.join(cache_dir, 'kanjidic2')
-    jmdict_cache = os.path.join(cache_dir, 'jmdict')
+    jmnedict_cache  = os.path.join(cache_dir, 'jmnedict')
+    jmdict_cache    = os.path.join(cache_dir, 'jmdict')
 
-    kanjidic2_script = os.path.join(SCRIPT_DIR, 'kanjidic2-to-git.py')
-    jmdict_script = os.path.join(SCRIPT_DIR, 'jmdict-to-git.py')
-    gitjidic2_sqlite_script = os.path.join(SCRIPT_DIR, 'gitjidic2-to-sqlite.py')
+    # ------------------------------------------------------------------
+    # Stage 1 — build JSON repos (git-friendly intermediate data)
+    # ------------------------------------------------------------------
 
-    print('--- Step 1: kanjidic2 ---', flush=True)
-    run(kanjidic2_script,
-        '-o', kanjidic2_dir,
+    print('--- Step 1: kanjidic2-to-git ---', flush=True)
+    run(script('kanjidic2-to-git.py'),
+        '-o', gitjidic2_dir,
         '--cache', kanjidic2_cache)
 
-    print('--- Step 2: jmdict (informed furigana) ---', flush=True)
-    run(jmdict_script,
-        '-o', output_dir,
-        '--kanjidic2', kanjidic2_dir,
+    print('--- Step 2: jmnedict-to-git ---', flush=True)
+    run(script('jmnedict-to-git.py'),
+        '-o', gitndict_dir,
+        '--cache', jmnedict_cache)
+
+    print('--- Step 3: jmdict-to-git (informed furigana) ---', flush=True)
+    run(script('jmdict-to-git.py'),
+        '-o', gitmdict_dir,
+        '--kanjidic2', gitjidic2_dir,
         '--cache', jmdict_cache)
 
-    if kanjidic2_db_dir:
-        print('--- Step 3: kanjidic2.db ---', flush=True)
-        run(gitjidic2_sqlite_script,
-            '-i', kanjidic2_dir,
-            '-o', kanjidic2_db_dir)
+    if pitch_tsvs:
+        print('--- Step 4: pitch-to-git ---', flush=True)
+        pitch_args = [script('pitch-to-git.py')]
+        for tsv in pitch_tsvs:
+            pitch_args += ['-i', tsv]
+        pitch_args += ['-o', gitch_dir]
+        run(*pitch_args)
+    else:
+        print('--- Step 4: pitch-to-git skipped (no --pitch-tsv given) ---', flush=True)
+
+    # ------------------------------------------------------------------
+    # Stage 2 — compile JSON repos to SQLite
+    # ------------------------------------------------------------------
+
+    print('--- Step 5: gitjidic2-to-sqlite ---', flush=True)
+    run(script('gitjidic2-to-sqlite.py'),
+        '-i', gitjidic2_dir,
+        '-o', output_dir)
+
+    print('--- Step 6: gitmdict-to-sqlite ---', flush=True)
+    run(script('gitmdict-to-sqlite.py'),
+        '-i', gitmdict_dir,
+        '--nedict', gitndict_dir,
+        '-o', output_dir)
+
+    gitch_entries = os.path.join(gitch_dir, 'entries')
+    if os.path.isdir(gitch_entries):
+        print('--- Step 7: gitpitch-to-sqlite ---', flush=True)
+        run(script('gitpitch-to-sqlite.py'),
+            '-i', gitch_dir,
+            '-o', output_dir)
+    else:
+        print(f'--- Step 7: gitpitch-to-sqlite skipped (no gitch data at {gitch_dir}) ---',
+              flush=True)
+
+    if gitoeba_dir:
+        jmdict_path = os.path.join(output_dir, 'jmdict.db')
+        print('--- Step 8: gitoeba-to-sqlite ---', flush=True)
+        run(script('gitoeba-to-sqlite.py'),
+            '-i', gitoeba_dir,
+            '-j', jmdict_path,
+            '-o', output_dir)
+    else:
+        print('--- Step 8: gitoeba-to-sqlite skipped (no --gitoeba given) ---', flush=True)
 
     print('Done.', flush=True)
 
