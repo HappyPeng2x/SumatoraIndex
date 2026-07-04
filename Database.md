@@ -321,7 +321,11 @@ One row per kanji character.
 
 ## pitch.db
 
-Built by `gitch-to-sqlite.py` from a gitch JSON repository (produced by `pitch-to-git.py`).
+Built by `gitch-to-sqlite.py` from a gitch JSON repository.  The gitch repo is
+populated in two layers: `unidic-to-git.py` writes the base layer from the
+UniDic binary dictionary (~203k words), and the optional `pitch-to-git.py`
+overlays curated TSV data on top (curated entries overwrite UniDic entries for
+the same word).
 
 ### PitchAccent
 
@@ -396,10 +400,10 @@ Apply the same tier strategy to `ProperNounIndex` for proper name lookup, and di
 ### Full build (recommended)
 
 ```sh
-# All databases except examples and pitch (which need external data):
+# Standard build — includes pitch accent from UniDic automatically:
 python3 generate-jmdict.py -o output/
 
-# With pitch accent data:
+# With additional curated TSV pitch data (overlays UniDic):
 python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv
 
 # With Tatoeba example sentences:
@@ -409,35 +413,51 @@ python3 generate-jmdict.py -o output/ --gitoeba ~/Code/gitoeba/
 python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv --gitoeba ~/Code/gitoeba/
 ```
 
-`generate-jmdict.py` runs all steps in dependency order.  Intermediate JSON
-repos are written to `~/Code/gitjidic2/`, `~/Code/gitmdict/`,
-`~/Code/gitnedict/`, and `~/Code/gitch/` by default (override with
-`--gitjidic2`, `--gitmdict`, `--gitnedict`, `--gitch`).  Downloads are cached
-in `~/.cache/` (override with `--cache`).
+`generate-jmdict.py` runs all nine steps in dependency order:
 
-The pitch step is skipped when no `--pitch-tsv` is given but runs automatically
-if `~/Code/gitch/entries/` already exists from a previous run.
-The examples step is skipped unless `--gitoeba` is given.
+| Step | Script | Always runs |
+|------|--------|-------------|
+| 1 | `kanjidic2-to-git.py` | yes |
+| 2 | `jmnedict-to-git.py` | yes |
+| 3 | `jmdict-to-git.py` | yes |
+| 4 | `unidic-to-git.py` | yes — downloads UniDic from NINJAL, cached in `~/.cache/unidic/` |
+| 5 | `pitch-to-git.py` | only when `*.tsv` files are found in `--pitch-dir` or via `--pitch-tsv` |
+| 6 | `gitjidic2-to-sqlite.py` | yes |
+| 7 | `gitmdict-to-sqlite.py` | yes |
+| 8 | `gitch-to-sqlite.py` | yes |
+| 9 | `gitoeba-to-sqlite.py` | only when `--gitoeba` dir exists |
+
+Intermediate JSON repos are written to `~/Code/gitjidic2/`, `~/Code/gitmdict/`,
+`~/Code/gitnedict/`, and `~/Code/gitch/` by default (override with
+`--gitjidic2`, `--gitmdict`, `--gitnedict`, `--gitch`).  All network downloads
+are cached in `~/.cache/` (override with `--cache`).
 
 ### Step by step
 
 ```sh
 # Stage 1 — JSON repos (git-friendly intermediate data)
-python3 kanjidic2-to-git.py  -o ~/Code/gitjidic2/ [--cache ~/.cache/kanjidic2]
-python3 jmnedict-to-git.py   -o ~/Code/gitnedict/  [--cache ~/.cache/jmnedict]
-python3 jmdict-to-git.py     -o ~/Code/gitmdict/  --kanjidic2 ~/Code/gitjidic2/ [--cache ~/.cache/jmdict]
-python3 pitch-to-git.py      -i pitch_data.tsv    -o ~/Code/gitch/
+python3 kanjidic2-to-git.py -o ~/Code/gitjidic2/ [--cache ~/.cache/kanjidic2]
+python3 jmnedict-to-git.py  -o ~/Code/gitnedict/  [--cache ~/.cache/jmnedict]
+python3 jmdict-to-git.py    -o ~/Code/gitmdict/  --kanjidic2 ~/Code/gitjidic2/ [--cache ~/.cache/jmdict]
+python3 unidic-to-git.py    -o ~/Code/gitch/     [--cache ~/.cache/unidic]
+python3 pitch-to-git.py     -i pitch_data.tsv    -o ~/Code/gitch/   # optional overlay
 
 # Stage 2 — SQLite databases
-python3 gitjidic2-to-sqlite.py  -i ~/Code/gitjidic2/ -o output/
-python3 gitmdict-to-sqlite.py   -i ~/Code/gitmdict/  --nedict ~/Code/gitnedict/ -o output/
-python3 gitch-to-sqlite.py   -i ~/Code/gitch/     -o output/
-python3 gitoeba-to-sqlite.py    -i ~/Code/gitoeba/   -j output/jmdict.db -o output/
+python3 gitjidic2-to-sqlite.py -i ~/Code/gitjidic2/ -o output/
+python3 gitmdict-to-sqlite.py  -i ~/Code/gitmdict/  --nedict ~/Code/gitnedict/ -o output/
+python3 gitch-to-sqlite.py     -i ~/Code/gitch/      -o output/
+python3 gitoeba-to-sqlite.py   -i ~/Code/gitoeba/    -j output/jmdict.db -o output/  # optional
 ```
 
-`kanjidic2-to-git.py`, `jmdict-to-git.py`, and `jmnedict-to-git.py` download
-their source XML automatically (cached locally).  `pitch-to-git.py` does not
-download anything — supply your own TSV data.
+`unidic-to-git.py` downloads `unidic-cwj-YYYYMM.zip` from
+`https://clrd.ninjal.ac.jp/unidic/download.html` (auto-discovers the latest
+release), extracts `sys.dic` (~243 MB cached), and discards the zip.
+Subsequent runs use a conditional GET and only re-download when NINJAL publishes
+a new version.
+
+`pitch-to-git.py` does not download anything — supply your own TSV data.  When
+run after `unidic-to-git.py`, its entries overwrite UniDic data for the same
+words; UniDic entries for all other words are preserved.
 
 Curated entry corrections can be placed in `patches/entries/{shard}/{seq}.json`
 as RFC 7396 JSON Merge Patches; they are applied automatically during
