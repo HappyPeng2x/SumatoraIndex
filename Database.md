@@ -1,6 +1,14 @@
 # Sumatora Database Structure
 
-Two SQLite databases are distributed per language: `jmdict.db` (shared) and `{lang}.db` (one per language, e.g. `eng.db`, `ger.db`). Both are built by `git-to-sqlite.py` from a gitmdict JSON repository.
+Five SQLite databases are distributed:
+
+| File | Built by | Contents |
+|------|----------|----------|
+| `jmdict.db` | `gitmdict-to-sqlite.py` | Dictionary entries, proper names, FTS5 indexes |
+| `{lang}.db` | `gitmdict-to-sqlite.py` | Per-language gloss translations + FTS5 |
+| `examples_{lang}.db` | `gitoeba-to-sqlite.py` | Tatoeba example sentences linked to entries |
+| `kanjidic2.db` | `gitjidic2-to-sqlite.py` | Kanji character metadata |
+| `pitch.db` | `pitch-to-sqlite.py` | Pitch accent data |
 
 ---
 
@@ -18,8 +26,8 @@ The main entry table. One row per JMdict entry.
 | `writingsPrio` | TEXT | Space-separated **priority** kanji writings |
 | `writings` | TEXT | Space-separated non-priority kanji writings |
 | `pos` | TEXT | JSON: per-sense arrays of part-of-speech codes |
-| `xref` | TEXT | JSON: per-sense arrays of cross-references |
-| `ant` | TEXT | JSON: per-sense arrays of antonyms |
+| `xref` | TEXT | JSON: per-sense arrays of resolved cross-references (see format below) |
+| `ant` | TEXT | JSON: per-sense arrays of resolved antonyms (same format as `xref`) |
 | `misc` | TEXT | JSON: per-sense miscellaneous info |
 | `lsource` | TEXT | JSON: per-sense language source info (see format below) |
 | `dial` | TEXT | JSON: per-sense dialect codes |
@@ -29,6 +37,13 @@ The main entry table. One row per JMdict entry.
 | `kanaData` | TEXT | JSON: full kana element array (see format below) |
 | `stagk` | TEXT | JSON: per-sense kanji form restrictions (NULL when unrestricted) |
 | `stagr` | TEXT | JSON: per-sense reading form restrictions (NULL when unrestricted) |
+| `furigana` | TEXT | JSON: map from kanji writing form to bracket-notation furigana string (see format below) |
+| `rules` | TEXT | Space-separated deinflection rule codes, or NULL for uninflectable entries |
+| `score` | INTEGER | Headword score: `+1` priority, `0` standard, `-1` irregular/rare |
+
+**Indexes:**
+- `DictionaryEntryRules ON DictionaryEntry (rules)` — for deinflection lookup
+- `DictionaryEntryScore ON DictionaryEntry (score)` — for score-ordered result ranking
 
 #### `kanjiData` format
 
@@ -74,6 +89,48 @@ Per-sense arrays of form strings; NULL when every sense is unrestricted.
 [[], ["漢字形1"], []]
 ```
 
+#### `furigana` format
+
+JSON object mapping each kanji writing form to its bracket-notation furigana string. NULL when the entry has no kanji forms.
+
+```json
+{"食べ物": "食[た]べ物[もの]", "食物": "食[しょく]物[もつ]"}
+```
+
+Bracket notation: `base[ruby]` for kanji runs, plain text for kana runs.  To display headword ruby, look up the matched writing form in this map.
+
+#### `xref` / `ant` format
+
+Outer array indexed by sense (parallel to `pos`). Each element is an array of reference objects. References with a known `seq` have been resolved to a concrete entry; those without could not be resolved (display as plain text).
+
+```json
+[
+  [{"text": "来る", "seq": 1547720}],
+  [{"text": "行く", "seq": 1289010, "sense": 2}]
+]
+```
+
+| Field | Type | Always present | Meaning |
+|-------|------|----------------|---------|
+| `text` | string | yes | Display form (kanji or kana) |
+| `seq` | integer | no | Target entry sequence number |
+| `sense` | integer | no | 1-based sense number within the target entry |
+
+#### `rules` values
+
+| Code | Part of speech |
+|------|----------------|
+| `v1` | Ichidan verb (食べる) |
+| `v5` | Godan verb (書く, 飲む, …) |
+| `vk` | Irregular くる |
+| `vs` | Suru-verb (勉強する) |
+| `vz` | Zuru-verb (感ずる) |
+| `adj-i` | I-adjective (高い) |
+
+Multiple codes are space-separated, e.g. `"v1 vs"` for 〜する variants of ichidan verbs.
+
+---
+
 ### DictionaryIndex (FTS5, contentless)
 
 FTS5 virtual table used for fast reading/writing lookup. **Contentless** (`content=""`): it stores only the FTS5 token index, not the original text. Column values must be retrieved from `DictionaryEntry`.
@@ -84,6 +141,7 @@ The `rowid` of each FTS5 row equals the `seq` of the corresponding `DictionaryEn
 SELECT DictionaryEntry.*
 FROM DictionaryEntry
 WHERE seq IN (SELECT rowid FROM DictionaryIndex WHERE writingsPrio MATCH ?)
+ORDER BY DictionaryEntry.score DESC
 ```
 
 | Column | Description |
@@ -101,6 +159,8 @@ WHERE seq IN (SELECT rowid FROM DictionaryIndex WHERE writingsPrio MATCH ?)
 
 **All kana columns store katakana.** Hiragana in the source data is converted to katakana before indexing. Search queries against these columns must also be katakana.
 
+---
+
 ### DictionaryEntity
 
 JMdict XML entity definitions (e.g. `v5k` → `"Godan verb with ku ending"`).
@@ -110,6 +170,8 @@ JMdict XML entity definitions (e.g. `v5k` → `"Godan verb with ku ending"`).
 | `name` | TEXT PK | Entity code |
 | `content` | TEXT | Human-readable expansion |
 
+---
+
 ### DictionaryControl
 
 Key/value metadata for the database build.
@@ -118,6 +180,47 @@ Key/value metadata for the database build.
 |---|---|
 | `control` | TEXT PK |
 | `value` | INTEGER |
+
+Rows present after a standard build:
+
+| `control` | Meaning |
+|-----------|---------|
+| `build_timestamp` | Unix epoch (seconds) when the database was built |
+| `format_version` | Schema/format version number (currently `1`) |
+| `entry_count` | Number of rows in `DictionaryEntry` |
+
+Consumers should check `format_version` on database open and refuse to use an unrecognized version.
+
+---
+
+### ProperNounEntry
+
+One row per JMnedict entry (people, places, organisations, etc.).
+
+| Column | Type | Description |
+|---|---|---|
+| `seq` | INTEGER PK | JMnedict sequence number |
+| `readings` | TEXT | Space-separated kana readings |
+| `writings` | TEXT | Space-separated kanji writings (may be NULL for kana-only names) |
+| `types` | TEXT | JSON array of name type strings (see below) |
+| `translations` | TEXT | JSON array of translation strings |
+
+Common `types` values: `place`, `person`, `given`, `surname`, `station`, `company`, `org`, `product`, `work`.
+
+---
+
+### ProperNounIndex (FTS5, contentless)
+
+FTS5 virtual table for proper name lookup. Rowid equals `ProperNounEntry.rowid` (which equals `seq`).
+
+```sql
+CREATE VIRTUAL TABLE ProperNounIndex USING fts5(
+    readingsKana, readingsKanaParts,
+    writings, writingsParts,
+    content="")
+```
+
+Column layout mirrors `DictionaryIndex` (kana in katakana, suffix-parts columns for substring search). Apply the same tier search strategy as for `DictionaryIndex`.
 
 ---
 
@@ -153,18 +256,120 @@ WHERE fts.gloss MATCH ?
 
 ---
 
-## How apps consume the databases
+## examples_{lang}.db  (e.g. examples_eng.db)
 
-Both the Android app and the PWA open `jmdict.db` as the main schema and ATTACH the language database:
+Built by `gitoeba-to-sqlite.py` from a Tatoeba sentence corpus linked to JMdict entries.
+
+### ExamplePairs
+
+One row per (entry, sentence) link.
+
+| Column | Type | Description |
+|---|---|---|
+| `seq` | INTEGER | JMdict sequence number |
+| `sentence_id` | INTEGER | Tatoeba sentence ID |
+| `sentence` | TEXT | Japanese sentence text (with `{expression;reading}` furigana markup) |
+| `translation` | TEXT | Translation in the target language |
+| `matched_token` | TEXT | Surface writing of the token that caused this sentence to be linked to the entry |
+
+### ExamplesSummary (VIEW)
+
+Aggregates `ExamplePairs` to one row per `(seq, sentence_id)` pair.
 
 ```sql
-ATTACH DATABASE '/eng.db' AS "eng"
--- then query as: jmdict.DictionaryEntry, eng.DictionaryTranslation, eng.DictionaryTranslationIndex
+CREATE VIEW ExamplesSummary AS
+SELECT seq,
+       sentence_id,
+       MAX(sentence)      AS sentence,
+       MAX(translation)   AS translation,
+       json_group_array(matched_token) AS matched_tokens
+FROM ExamplePairs
+GROUP BY seq, sentence_id
+```
+
+`matched_tokens` is a JSON array of surface writing strings — the tokens that caused this sentence to be linked to the entry. Use it to highlight the relevant token(s) in the rendered sentence.
+
+---
+
+## kanjidic2.db
+
+Built by `gitjidic2-to-sqlite.py` from a gitjidic2 JSON repository (produced by `kanjidic2-to-git.py`).
+
+### KanjiEntry
+
+One row per kanji character.
+
+| Column | Type | Description |
+|---|---|---|
+| `char` | TEXT PK | Single kanji character |
+| `on` | TEXT | Space-separated on readings (katakana) |
+| `kun` | TEXT | Space-separated kun readings (hiragana; okurigana after `.`) |
+| `meanings` | TEXT | JSON array of English meaning strings |
+| `strokes` | INTEGER | Stroke count (NULL if absent) |
+| `grade` | INTEGER | School grade: 1–6 kyōiku, 8 jōyō/jinmeiyō; NULL otherwise |
+| `jlpt` | INTEGER | Old JLPT level 1–4 (4 = N5, 1 = N1); NULL if not listed |
+| `freq` | INTEGER | Newspaper frequency rank; NULL if not listed |
+| `radical` | INTEGER | Classical radical number |
+
+### KanjiControl
+
+| `control` | Meaning |
+|-----------|---------|
+| `build_timestamp` | Unix epoch when the database was built |
+| `char_count` | Number of rows in `KanjiEntry` |
+
+---
+
+## pitch.db
+
+Built by `pitch-to-sqlite.py` from one or more user-supplied TSV files.
+
+### PitchAccent
+
+One row per (word, reading) pair. Multiple valid pitch patterns for the same pair are merged into a single row.
+
+| Column | Type | Description |
+|---|---|---|
+| `word` | TEXT | Dictionary headword (kanji or kana surface form) |
+| `reading` | TEXT | Hiragana reading |
+| `pitches` | TEXT | JSON array of integer pitch drop positions |
+| PRIMARY KEY | (word, reading) | |
+
+**Index:** `PitchAccentReading ON PitchAccent (reading)` — for reading-only lookup when no kanji form is known.
+
+**Pitch position encoding:**
+- `0` — heiban: rises after mora 1, stays high (LH…H)
+- `1` — atamadaka: drops after mora 1 (HL…L)
+- `N` — drops after mora N; if N equals the mora count of the reading the word is odaka (LH…HL)
+
+### PitchControl
+
+| `control` | Meaning |
+|-----------|---------|
+| `build_timestamp` | Unix epoch when the database was built |
+| `entry_count` | Number of rows in `PitchAccent` |
+
+---
+
+## How apps consume the databases
+
+The main databases are opened individually; the language database is ATTACHed:
+
+```sql
+ATTACH DATABASE '/path/to/eng.db' AS "eng"
+-- then query as: DictionaryEntry, eng.DictionaryTranslation, eng.DictionaryTranslationIndex
+```
+
+For examples, attach separately:
+
+```sql
+ATTACH DATABASE '/path/to/examples_eng.db' AS "examples_eng"
+-- then join: LEFT JOIN examples_eng.ExamplesSummary ON DictionaryEntry.seq = ExamplesSummary.seq
 ```
 
 ### Search strategy (priority order)
 
-Forward search steps (stopping when enough results are found):
+Forward search steps (stopping when enough results are found), results ordered by `DictionaryEntry.score DESC` within each tier:
 
 1. `writingsPrio MATCH term` — exact kanji, priority
 2. `readingsPrioKana MATCH kata` — exact kana, priority
@@ -181,17 +386,33 @@ Forward search steps (stopping when enough results are found):
 13. `DictionaryTranslationIndex.gloss MATCH term` — exact gloss
 14. `DictionaryTranslationIndex.gloss MATCH term*` — prefix gloss
 
-`kata` is the search term normalized to katakana (hiragana and rōmaji are converted before querying).
+`kata` is the search term normalized to katakana (hiragana is converted before querying).
+
+Apply the same tier strategy to `ProperNounIndex` for proper name lookup, and display the results in a separate section.
 
 ---
 
 ## Building the databases
 
 ```sh
-python3 jmdict-to-git.py -o gitmdict/
-python3 git-to-sqlite.py -i gitmdict/ -o output/
+# Full build (recommended): kanjidic2 first, then jmdict with informed furigana
+python3 generate-jmdict.py -o gitmdict/ [--kanjidic2-dir gitjidic2/] [--cache ~/.cache]
+
+# Or step by step:
+python3 kanjidic2-to-git.py -o gitjidic2/ [--cache ~/.cache/kanjidic2]
+python3 jmdict-to-git.py   -o gitmdict/  [--kanjidic2 gitjidic2/] [--cache ~/.cache/jmdict]
+python3 jmnedict-to-git.py -o gitndict/  [--cache ~/.cache/jmnedict]
+
+python3 gitmdict-to-sqlite.py -i gitmdict/ -o output/ [--nedict gitndict/]
+python3 gitjidic2-to-sqlite.py -i gitjidic2/ -o output/
+python3 gitoeba-to-sqlite.py  [options]
+
+# Pitch accent (requires a user-supplied TSV file):
+python3 pitch-to-sqlite.py -i pitch_data.tsv -o output/
 ```
 
-`jmdict-to-git.py` downloads JMdict automatically (cached in `~/.cache/jmdict/`).
+`jmdict-to-git.py` and `jmnedict-to-git.py` download their source XML automatically (cached locally). `kanjidic2-to-git.py` also downloads automatically. `pitch-to-sqlite.py` does not download anything — supply your own TSV data.
 
-Output: `output/jmdict.db`, `output/eng.db`, `output/ger.db`, etc.
+Curated entry corrections can be placed in `patches/entries/{shard}/{seq}.json` as RFC 7396 JSON Merge Patches; they are applied automatically during `jmdict-to-git.py`.
+
+Output files: `output/jmdict.db`, `output/eng.db`, `output/ger.db`, …, `output/kanjidic2.db`, `output/pitch.db`.
