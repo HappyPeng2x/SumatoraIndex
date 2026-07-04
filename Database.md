@@ -411,8 +411,8 @@ python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv --gitoeba ~/Cod
 
 `generate-jmdict.py` runs all steps in dependency order.  Intermediate JSON
 repos are written to `~/Code/gitjidic2/`, `~/Code/gitmdict/`,
-`~/Code/gitndict/`, and `~/Code/gitch/` by default (override with
-`--gitjidic2`, `--gitmdict`, `--gitndict`, `--gitch`).  Downloads are cached
+`~/Code/gitnedict/`, and `~/Code/gitch/` by default (override with
+`--gitjidic2`, `--gitmdict`, `--gitnedict`, `--gitch`).  Downloads are cached
 in `~/.cache/` (override with `--cache`).
 
 The pitch step is skipped when no `--pitch-tsv` is given but runs automatically
@@ -424,13 +424,13 @@ The examples step is skipped unless `--gitoeba` is given.
 ```sh
 # Stage 1 — JSON repos (git-friendly intermediate data)
 python3 kanjidic2-to-git.py  -o ~/Code/gitjidic2/ [--cache ~/.cache/kanjidic2]
-python3 jmnedict-to-git.py   -o ~/Code/gitndict/  [--cache ~/.cache/jmnedict]
+python3 jmnedict-to-git.py   -o ~/Code/gitnedict/  [--cache ~/.cache/jmnedict]
 python3 jmdict-to-git.py     -o ~/Code/gitmdict/  --kanjidic2 ~/Code/gitjidic2/ [--cache ~/.cache/jmdict]
 python3 pitch-to-git.py      -i pitch_data.tsv    -o ~/Code/gitch/
 
 # Stage 2 — SQLite databases
 python3 gitjidic2-to-sqlite.py  -i ~/Code/gitjidic2/ -o output/
-python3 gitmdict-to-sqlite.py   -i ~/Code/gitmdict/  --nedict ~/Code/gitndict/ -o output/
+python3 gitmdict-to-sqlite.py   -i ~/Code/gitmdict/  --nedict ~/Code/gitnedict/ -o output/
 python3 gitch-to-sqlite.py   -i ~/Code/gitch/     -o output/
 python3 gitoeba-to-sqlite.py    -i ~/Code/gitoeba/   -j output/jmdict.db -o output/
 ```

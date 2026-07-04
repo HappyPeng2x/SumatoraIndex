@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download JMnedict and write a gitndict JSON git repository.
+"""Download JMnedict and write a gitnedict JSON git repository.
 
 Downloads JMnedict.xml.gz from the EDRDG server, caches it locally, then
 parses the XML into one JSON file per entry, mirroring the layout of the
@@ -258,7 +258,7 @@ def process(output_dir, cache_dir):
 
 HELP = (
     'usage: jmnedict-to-git.py '
-    '-o <gitndict directory> [--cache <cache directory>]'
+    '-o <gitnedict directory> [--cache <cache directory>]'
 )
 
 

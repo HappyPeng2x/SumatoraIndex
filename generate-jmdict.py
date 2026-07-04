@@ -7,11 +7,11 @@ SQLite databases from downloadable and user-supplied source data.
 Dependency graph (→ = depends on):
 
     kanjidic2-to-git.py    →  gitjidic2/
-    jmnedict-to-git.py     →  gitndict/
+    jmnedict-to-git.py     →  gitnedict/
     jmdict-to-git.py       →  gitmdict/       (uses gitjidic2/ for informed furigana)
     [pitch-to-git.py]      →  gitch/          (only when --pitch-tsv is given)
     gitjidic2-to-sqlite.py →  kanjidic2.db
-    gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitndict/ for proper names)
+    gitmdict-to-sqlite.py  →  jmdict.db, {lang}.db  (uses gitnedict/ for proper names)
     [gitch-to-sqlite.py]→  pitch.db        (only when gitch/entries/ exists)
     [gitoeba-to-sqlite.py] →  examples_{lang}.db    (only when --gitoeba is given)
 
@@ -22,7 +22,7 @@ Usage:
     generate-jmdict.py -o <sqlite output dir>
         [--gitjidic2  <dir>]   intermediate kanjidic2 JSON repo  (default: ~/Code/gitjidic2)
         [--gitmdict   <dir>]   intermediate jmdict JSON repo      (default: ~/Code/gitmdict)
-        [--gitndict   <dir>]   intermediate jmnedict JSON repo    (default: ~/Code/gitndict)
+        [--gitnedict   <dir>]   intermediate jmnedict JSON repo    (default: ~/Code/gitnedict)
         [--gitch      <dir>]   intermediate pitch JSON repo       (default: ~/Code/gitch)
         [--gitoeba    <dir>]   Tatoeba JSON corpus; triggers examples pipeline
         [--pitch-tsv  <file>]  repeatable; triggers pitch-to-git step
@@ -49,7 +49,7 @@ HELP = (
     'usage: generate-jmdict.py -o <sqlite output dir>\n'
     '    [--gitjidic2  <dir>]   default: ~/Code/gitjidic2\n'
     '    [--gitmdict   <dir>]   default: ~/Code/gitmdict\n'
-    '    [--gitndict   <dir>]   default: ~/Code/gitndict\n'
+    '    [--gitnedict   <dir>]   default: ~/Code/gitnedict\n'
     '    [--gitch      <dir>]   default: ~/Code/gitch\n'
     '    [--gitoeba    <dir>]   triggers examples pipeline\n'
     '    [--pitch-tsv  <file>]  repeatable; triggers pitch-to-git step\n'
@@ -71,7 +71,7 @@ def main(argv):
     output_dir   = ''
     gitjidic2_dir = os.path.expanduser('~/Code/gitjidic2')
     gitmdict_dir  = os.path.expanduser('~/Code/gitmdict')
-    gitndict_dir  = os.path.expanduser('~/Code/gitndict')
+    gitnedict_dir  = os.path.expanduser('~/Code/gitnedict')
     gitch_dir     = os.path.expanduser('~/Code/gitch')
     gitoeba_dir   = None
     pitch_tsvs    = []
@@ -80,7 +80,7 @@ def main(argv):
     try:
         opts, _ = getopt.getopt(
             argv, 'ho:',
-            ['odir=', 'gitjidic2=', 'gitmdict=', 'gitndict=', 'gitch=',
+            ['odir=', 'gitjidic2=', 'gitmdict=', 'gitnedict=', 'gitch=',
              'gitoeba=', 'pitch-tsv=', 'cache='],
         )
     except getopt.GetoptError:
@@ -97,8 +97,8 @@ def main(argv):
             gitjidic2_dir = arg
         elif opt == '--gitmdict':
             gitmdict_dir = arg
-        elif opt == '--gitndict':
-            gitndict_dir = arg
+        elif opt == '--gitnedict':
+            gitnedict_dir = arg
         elif opt == '--gitch':
             gitch_dir = arg
         elif opt == '--gitoeba':
@@ -127,7 +127,7 @@ def main(argv):
 
     print('--- Step 2: jmnedict-to-git ---', flush=True)
     run(script('jmnedict-to-git.py'),
-        '-o', gitndict_dir,
+        '-o', gitnedict_dir,
         '--cache', jmnedict_cache)
 
     print('--- Step 3: jmdict-to-git (informed furigana) ---', flush=True)
@@ -158,7 +158,7 @@ def main(argv):
     print('--- Step 6: gitmdict-to-sqlite ---', flush=True)
     run(script('gitmdict-to-sqlite.py'),
         '-i', gitmdict_dir,
-        '--nedict', gitndict_dir,
+        '--nedict', gitnedict_dir,
         '-o', output_dir)
 
     gitch_entries = os.path.join(gitch_dir, 'entries')

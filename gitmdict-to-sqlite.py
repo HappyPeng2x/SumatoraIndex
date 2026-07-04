@@ -604,7 +604,7 @@ def process(git_dir, output_dir, nedict_dir=None):
 
 HELP = ('usage: git-to-sqlite.py '
         '-i <gitmdict directory> -o <output directory> '
-        '[--nedict <gitndict directory>]')
+        '[--nedict <gitnedict directory>]')
 
 
 def main(argv):
