@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 
 from lxml import etree
@@ -39,17 +40,90 @@ SHARD_SIZE = 10000
 # ---------------------------------------------------------------------------
 
 def _download(url, dest):
+    """Download url to dest atomically via a temp file, saving validation headers."""
     print(f'  Downloading {url} …', flush=True)
-    urllib.request.urlretrieve(url, dest)
+    tmp = dest + '.tmp'
+    try:
+        with urllib.request.urlopen(url) as resp:
+            with open(tmp, 'wb') as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            saved = {}
+            if resp.headers.get('ETag'):
+                saved['etag'] = resp.headers['ETag']
+            if resp.headers.get('Last-Modified'):
+                saved['last-modified'] = resp.headers['Last-Modified']
+        os.replace(tmp, dest)
+        with open(dest + '.headers', 'w') as f:
+            json.dump(saved, f)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def ensure_cached(url, cache_dir):
-    """Return local path to the cached file, downloading if absent."""
+    """Return local path to cached file, re-downloading when the server has a newer version.
+
+    On first download the file and its HTTP validation headers (ETag,
+    Last-Modified) are saved to disk.  On subsequent calls a conditional GET
+    is issued with If-None-Match / If-Modified-Since; a 304 Not Modified
+    response leaves the cached file untouched.
+    """
     os.makedirs(cache_dir, exist_ok=True)
     name = url.split('/')[-1]
     path = os.path.join(cache_dir, name)
+
     if not os.path.exists(path):
         _download(url, path)
+        return path
+
+    # File exists — build a conditional GET using stored validators.
+    headers_path = path + '.headers'
+    saved = {}
+    if os.path.exists(headers_path):
+        with open(headers_path) as f:
+            saved = json.load(f)
+
+    req = urllib.request.Request(url)
+    if saved.get('etag'):
+        req.add_header('If-None-Match', saved['etag'])
+    if saved.get('last-modified'):
+        req.add_header('If-Modified-Since', saved['last-modified'])
+
+    tmp = path + '.tmp'
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print(f'  Remote file changed, re-downloading {url} …', flush=True)
+            with open(tmp, 'wb') as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            new_saved = {}
+            if resp.headers.get('ETag'):
+                new_saved['etag'] = resp.headers['ETag']
+            if resp.headers.get('Last-Modified'):
+                new_saved['last-modified'] = resp.headers['Last-Modified']
+        os.replace(tmp, path)
+        with open(headers_path, 'w') as f:
+            json.dump(new_saved, f)
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            print(f'  {name} is up to date', flush=True)
+        else:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
     return path
 
 
