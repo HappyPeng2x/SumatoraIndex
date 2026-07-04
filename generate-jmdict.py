@@ -144,7 +144,8 @@ def main(argv):
         '--cache', jmdict_cache)
 
     print('--- Step 4: unidic-to-git ---', flush=True)
-    run(script('unidic-to-git.py'), '-o', gitch_dir)
+    unidic_cache = os.path.join(cache_dir, 'unidic')
+    run(script('unidic-to-git.py'), '-o', gitch_dir, '--cache', unidic_cache)
 
     if not pitch_tsvs and os.path.isdir(pitch_dir):
         pitch_tsvs = sorted(glob.glob(os.path.join(pitch_dir, '*.tsv')))

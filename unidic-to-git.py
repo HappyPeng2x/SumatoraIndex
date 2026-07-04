@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Extract pitch accent data from the installed UniDic binary dictionary.
+"""Download the UniDic binary archive and extract pitch accent data.
 
-Reads sys.dic from the `unidic` Python package, parses its feature section,
-and writes pitch accent entries to a gitch JSON repository.
+Downloads the UniDic-cwj zip from NINJAL, extracts sys.dic from it (the
+zip is discarded afterwards; only sys.dic is kept in the cache), reads the
+feature section of sys.dic to extract pitch accent annotations, and writes
+the data to a gitch JSON repository.
 
-Prerequisites:
-    pip install unidic
-    python -m unidic download    # one-time ~526 MB download from NINJAL/AWS
+The regular (non-_full) zip is used (~570 MB download, ~243 MB cached sys.dic)
+rather than the _full archive (2.8 GB), because the binary contains all the
+pitch data we need and is far smaller than the source lex.csv distribution.
 
 UniDic is distributed by NINJAL under a GPL v2.0 / LGPL v2.1 / BSD New
 triple licence — compatible with GPLv3 and AGPLv3.
@@ -14,11 +16,11 @@ triple licence — compatible with GPLv3 and AGPLv3.
 Feature field positions inside sys.dic (determined empirically):
     8  orth   written form (kanji or kana as it appears in running text)
     9  pron   pronunciation in katakana (ー marks long vowels)
-    24 aType  pitch accent drop position(s); may be multi-valued: "0,2"
+    24 aType  pitch accent drop position(s); CSV-quoted when multi-valued
 
-The aType values in the raw binary use CSV quoting when they contain commas
-(e.g.  "0,2"  for a word with two possible pitch patterns).  Each feature
-string is therefore parsed with csv.reader rather than a naïve split.
+The aType field is stored with CSV quoting when it contains commas (e.g.
+"0,2" for a word that has two possible pitch patterns).  Each feature string
+is therefore parsed with csv.reader rather than a naïve split.
 
 Pitch position encoding (same as the rest of the pipeline):
     0  — heiban    (LH…H, no drop)
@@ -33,7 +35,12 @@ Output follows the gitch directory layout consumed by gitch-to-sqlite.py:
                 {word}.json    shard = ord(word[0]) // 1000
 
 Usage:
-    unidic-to-git.py -o <gitch directory> [--dicdir <path to sys.dic dir>]
+    unidic-to-git.py -o <gitch directory>
+        [--cache <dir>]   download cache (default: ~/.cache/unidic)
+        [--url   <url>]   pin a specific zip URL (default: auto-discover)
+
+The default URL is auto-discovered from https://clrd.ninjal.ac.jp/unidic/download.html
+so the latest release is always used.  Use --url to pin a specific version.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -43,16 +50,26 @@ version.
 
 __author__ = "Nicolas Centa"
 __license__ = "GPLv3"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import csv
 import getopt
 import io
 import json
 import os
+import re
 import struct
 import sys
 import unicodedata
+import urllib.error
+import urllib.request
+import zipfile
+
+_NINJAL_BASE         = 'https://clrd.ninjal.ac.jp'
+_DOWNLOAD_PAGE       = _NINJAL_BASE + '/unidic/download.html'
+_FALLBACK_UNIDIC_URL = _NINJAL_BASE + '/unidic_archive/2512/unidic-cwj-202512.zip'
+# Match the regular (non-_full) cwj zip to keep the download small.
+_CWJ_RE = re.compile(r'/unidic_archive/\d+/unidic-cwj-\d+\.zip(?!\.)')
 
 _COL_ORTH  = 8    # written form (kanji/kana)
 _COL_PRON  = 9    # katakana pronunciation
@@ -60,47 +77,167 @@ _COL_ATYPE = 24   # pitch drop position(s); CSV-quoted when multi-valued
 
 
 # ---------------------------------------------------------------------------
-# UniDic location
+# URL discovery
 # ---------------------------------------------------------------------------
 
-def find_dicdir():
-    """Return the sys.dic directory from the installed `unidic` package."""
+def discover_url():
+    """Return the latest UniDic-cwj (non-_full) zip URL from the NINJAL download page."""
     try:
-        import unidic
-        return unidic.DICDIR
-    except ImportError:
-        print(
-            'Error: the `unidic` Python package is not installed.\n'
-            '  pip install unidic\n'
-            '  python -m unidic download',
-            file=sys.stderr,
+        with urllib.request.urlopen(_DOWNLOAD_PAGE, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='replace')
+        m = _CWJ_RE.search(html)
+        if m:
+            url = _NINJAL_BASE + m.group(0)
+            print(f'  Latest UniDic-cwj: {url}', flush=True)
+            return url
+        print('  Warning: cwj link not found on download page; using fallback URL',
+              flush=True)
+    except Exception as exc:
+        print(f'  Warning: could not fetch download page ({exc}); using fallback URL',
+              flush=True)
+    return _FALLBACK_UNIDIC_URL
+
+
+# ---------------------------------------------------------------------------
+# Download / cache helpers
+# ---------------------------------------------------------------------------
+
+def _stream_zip_to_file(resp, dest):
+    """Write the body of an open urllib response to dest, showing progress."""
+    total = resp.headers.get('Content-Length')
+    done = 0
+    with open(dest, 'wb') as f:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            if total:
+                pct = done * 100 // int(total)
+                print(
+                    f'\r  {done // (1024 * 1024)} / '
+                    f'{int(total) // (1024 * 1024)} MB  ({pct}%)',
+                    end='', flush=True,
+                )
+    print(flush=True)
+    saved = {}
+    if resp.headers.get('ETag'):
+        saved['etag'] = resp.headers['ETag']
+    if resp.headers.get('Last-Modified'):
+        saved['last-modified'] = resp.headers['Last-Modified']
+    return saved
+
+
+def _extract_sysdic(zip_path, dest):
+    """Extract sys.dic from zip_path and write it atomically to dest."""
+    print('  Extracting sys.dic from zip…', flush=True)
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        name = next(
+            (n for n in zf.namelist() if os.path.basename(n) == 'sys.dic'),
+            None,
         )
-        sys.exit(1)
+        if name is None:
+            print('Error: sys.dic not found in archive', file=sys.stderr)
+            sys.exit(1)
+        tmp = dest + '.tmp'
+        try:
+            with zf.open(name) as src, open(tmp, 'wb') as out:
+                while True:
+                    chunk = src.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            os.replace(tmp, dest)
+        except Exception:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+
+def _download_and_extract(url, cache_dir, resp=None):
+    """Download zip (or use open resp), extract sys.dic, discard zip, save headers."""
+    sysdic_path  = os.path.join(cache_dir, 'sys.dic')
+    headers_path = os.path.join(cache_dir, 'sys.dic.headers')
+    tmp_zip      = os.path.join(cache_dir, '_download.zip.tmp')
+    try:
+        if resp is not None:
+            saved = _stream_zip_to_file(resp, tmp_zip)
+        else:
+            print(f'  Downloading {url} …', flush=True)
+            with urllib.request.urlopen(url) as r:
+                saved = _stream_zip_to_file(r, tmp_zip)
+        _extract_sysdic(tmp_zip, sysdic_path)
+        with open(headers_path, 'w') as f:
+            json.dump(saved, f)
+    finally:
+        if os.path.exists(tmp_zip):
+            os.unlink(tmp_zip)
+
+
+def ensure_sysdic(url, cache_dir):
+    """Return path to a cached sys.dic, refreshing from NINJAL when the zip has changed.
+
+    Cache layout (cache_dir/):
+        sys.dic           — extracted binary dictionary
+        sys.dic.headers   — ETag / Last-Modified from the last zip download
+
+    The zip itself is never kept; it is downloaded to a temp file, sys.dic is
+    extracted, and the zip is deleted.  This keeps the persistent cache at
+    ~243 MB rather than ~813 MB.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    sysdic_path  = os.path.join(cache_dir, 'sys.dic')
+    headers_path = os.path.join(cache_dir, 'sys.dic.headers')
+
+    if not os.path.exists(sysdic_path):
+        _download_and_extract(url, cache_dir)
+        return sysdic_path
+
+    saved = {}
+    if os.path.exists(headers_path):
+        with open(headers_path) as f:
+            saved = json.load(f)
+
+    if not saved:
+        print('  Using cached sys.dic (no validators; delete to force refresh)',
+              flush=True)
+        return sysdic_path
+
+    req = urllib.request.Request(url)
+    if saved.get('etag'):
+        req.add_header('If-None-Match', saved['etag'])
+    if saved.get('last-modified'):
+        req.add_header('If-Modified-Since', saved['last-modified'])
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print('  Remote zip changed, re-downloading…', flush=True)
+            _download_and_extract(url, cache_dir, resp=resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            print('  UniDic is up to date', flush=True)
+        else:
+            raise
+
+    return sysdic_path
 
 
 # ---------------------------------------------------------------------------
 # Binary parsing
 # ---------------------------------------------------------------------------
 
-def _read_feature_block(dicdir):
-    """Return the raw feature bytes from sys.dic."""
-    path = os.path.join(dicdir, 'sys.dic')
-    if not os.path.exists(path):
-        print(
-            f'Error: sys.dic not found in {dicdir!r}.\n'
-            '  Run: python -m unidic download',
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    with open(path, 'rb') as f:
+def _read_feature_block(sysdic_path):
+    """Return the raw feature-section bytes from sys.dic."""
+    with open(sysdic_path, 'rb') as f:
         hdr = f.read(72)
     fields = struct.unpack_from('<IIIIIIIIII', hdr, 0)
     # dsize is in double-array units (8 bytes each)
-    da_bytes   = fields[6] * 8
-    tok_bytes  = fields[7]
-    feat_bytes = fields[8]
+    da_bytes    = fields[6] * 8
+    tok_bytes   = fields[7]
+    feat_bytes  = fields[8]
     feat_offset = 72 + da_bytes + tok_bytes
-    with open(path, 'rb') as f:
+    with open(sysdic_path, 'rb') as f:
         f.seek(feat_offset)
         return f.read(feat_bytes)
 
@@ -122,10 +259,10 @@ def _parse_atype(s):
     return sorted(set(positions))
 
 
-def parse_entries(dicdir):
+def parse_entries(sysdic_path):
     """Yield (word, reading_hiragana, [pitch_positions]) for every entry with pitch."""
-    print(f'  Reading sys.dic from {dicdir}', flush=True)
-    block = _read_feature_block(dicdir)
+    print(f'  Parsing feature section of {sysdic_path}', flush=True)
+    block = _read_feature_block(sysdic_path)
     count = 0
     for raw in block.split(b'\x00'):
         if not raw:
@@ -134,7 +271,7 @@ def parse_entries(dicdir):
             line = raw.decode('utf-8')
         except UnicodeDecodeError:
             continue
-        # Use csv.reader so that quoted fields like "0,2" parse as one token.
+        # csv.reader handles quoted fields like "0,2" correctly.
         try:
             row = next(csv.reader(io.StringIO(line)))
         except StopIteration:
@@ -172,10 +309,12 @@ def write_json(path, data):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process(output_dir, dicdir):
+def process(output_dir, cache_dir, url):
+    sysdic_path = ensure_sysdic(url, cache_dir)
+
     merged = {}  # word → {reading → set of pitch positions}
 
-    for word, reading, positions in parse_entries(dicdir):
+    for word, reading, positions in parse_entries(sysdic_path):
         if word not in merged:
             merged[word] = {}
         if reading not in merged[word]:
@@ -183,7 +322,8 @@ def process(output_dir, dicdir):
         merged[word][reading].update(positions)
 
     total_pairs = sum(len(v) for v in merged.values())
-    print(f'  {total_pairs} (word, reading) pairs → {len(merged)} unique words', flush=True)
+    print(f'  {total_pairs} (word, reading) pairs → {len(merged)} unique words',
+          flush=True)
 
     os.makedirs(output_dir, exist_ok=True)
     pair_count = 0
@@ -218,16 +358,17 @@ def process(output_dir, dicdir):
 
 HELP = (
     'usage: unidic-to-git.py -o <gitch directory>\n'
-    '    [--dicdir <dir>]   path to the UniDic sys.dic directory\n'
-    '                       (default: auto-detect from installed `unidic` package)'
+    '    [--cache <dir>]   download cache (default: ~/.cache/unidic)\n'
+    '    [--url   <url>]   pin a specific zip URL (default: auto-discover latest)'
 )
 
 
 def main(argv):
     output_dir = ''
-    dicdir     = ''
+    cache_dir  = os.path.expanduser('~/.cache/unidic')
+    url        = ''
     try:
-        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'dicdir='])
+        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache=', 'url='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -237,14 +378,16 @@ def main(argv):
             sys.exit()
         elif opt in ('-o', '--odir'):
             output_dir = arg
-        elif opt == '--dicdir':
-            dicdir = arg
+        elif opt == '--cache':
+            cache_dir = arg
+        elif opt == '--url':
+            url = arg
     if not output_dir:
         print(HELP)
         sys.exit(2)
-    if not dicdir:
-        dicdir = find_dicdir()
-    process(output_dir, dicdir)
+    if not url:
+        url = discover_url()
+    process(output_dir, cache_dir, url)
 
 
 if __name__ == '__main__':
