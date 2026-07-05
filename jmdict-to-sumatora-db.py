@@ -4,13 +4,20 @@
 Reads entry + per-language translation JSON files produced by jmdict-to-git.py and
 writes rows into an existing (or newly created) sumatora.db, per schema-v2.md.
 
-Two full passes over gitmdict/entries/ are required:
+Three full passes over gitmdict/entries/ are required:
 
   Pass 1 — Entry, EntryForm, FormTag, FormFuriganaSegment.
-           Builds seq_to_entry_id plus kanji_index/kana_index (text -> [(seq,
-           entry_id, form_id), ...]) used by pass 2 to resolve cross-references,
-           since a xref can point at an entry processed either before or after
-           the current one in file order.
+           Builds seq_to_entry_id plus kanji_index (text -> [(seq, entry_id,
+           form_id, reading), ...]) and kana_index (text -> [(seq, entry_id,
+           form_id), ...]) used by pass 2 to resolve cross-references, since a
+           xref can point at an entry processed either before or after the
+           current one in file order. kanji_index carries the reading of each
+           row so a "headword・reading" xref resolves to the form_id for that
+           exact reading, not just any form_id sharing the headword text (a
+           kanji form can have more than one valid reading, e.g. 開く is both
+           ひらく and あく). Candidate forms for one entry are buffered before
+           insertion so is_primary can be chosen by score across the whole
+           entry rather than by JMdict source order.
 
   Pass 2 — SenseGroup, Sense, SenseGloss, SenseNote, SenseLanguageSource,
            SenseAppliesToForm, SenseReference, FormRule, SearchTerm,
@@ -18,6 +25,11 @@ Two full passes over gitmdict/entries/ are required:
            Per-language translation files are located directly by
            (lang, shard, seq) path rather than walking the whole translations/
            tree, since only entries actually present in gitmdict/entries/ matter.
+
+  Pass 3 — _resolve_reference_previews() fills in SenseReference.target_sense_id
+           and preview_text once every entry's Sense/SenseGloss rows exist — a
+           xref can point at an entry pass 2 had not reached yet in file order,
+           so its target sense can't always be resolved within pass 2 itself.
 
 Design choices carried over from schema-v2.md's own text (see schema-v2.md and
 the SumatoraIndex build plan in ~/.claude/plans/):
@@ -27,10 +39,6 @@ the SumatoraIndex build plan in ~/.claude/plans/):
   - Tag.category is assigned by which JMdict field a code came from, not by
     inspecting the code string. Priority codes (news1, ichi1, nf12, ...) drive
     EntryForm.is_common/score directly and are never turned into FormTag rows.
-  - target_sense_id in SenseReference is left NULL (only target_sense_number is
-    resolved from the "headword・reading・N" xref suffix) — resolving the exact
-    target Sense row would require a third full pass for a marginal benefit over
-    target_sense_number, which is enough for "jump to sense N" navigation.
   - FormRule is computed per-form (not per-entry like v1's DictionaryEntry.rules):
     a sense's derived rule codes are attributed only to the forms it applies to
     (via SenseAppliesToForm when stagk/stagr restrict it, otherwise all forms of
@@ -61,6 +69,11 @@ from sumatora_common import TagCache, hira_to_kata, is_priority_code, iter_json_
 
 # Kanji-element info tags that mark a form as irregular or rarely used.
 _IRREGULAR_TAGS = frozenset({'iK', 'rK', 'io'})
+
+# Search-only tags: valid search keys, but never shown as a headline/forms-table
+# entry (mirrors Jitendex's sK/sk handling).
+_SEARCH_ONLY_KANJI_TAG = 'sK'
+_SEARCH_ONLY_KANA_TAG = 'sk'
 
 # Maps JMdict POS entity codes to Yomitan-compatible deinflection rule codes.
 _POS_TO_RULES = {
@@ -108,8 +121,27 @@ def _applicable_readings(kanji_text, kana_list):
 
 
 def _fallback_furigana_segments(text, reading):
-    """Conservative furigana for alternate readings not precomputed in gitmdict."""
+    """Conservative furigana for a reading missing from furiganaByReading.
+
+    Should be rare now that jmdict-to-git.py solves furigana for every
+    applicable reading of a kanji form, not just the first; kept as a safety
+    net for gitmdict data built before that change, or any reading the solver
+    genuinely has no map entry for.
+    """
     return [(text, reading)]
+
+
+def _select_primary(candidates):
+    """Return the index of the candidate EntryForm row that should be primary.
+
+    candidates: list of dicts with 'score', 'is_common', 'is_search_only', in
+    original source order. Search-only (sK/sk) forms are never eligible —
+    Jitendex never shows them as a headline, only as hidden search keys.
+    Ties keep the earliest candidate, matching the previous first-in-source
+    behavior when scores are equal.
+    """
+    pool = [i for i, f in enumerate(candidates) if not f['is_search_only']] or list(range(len(candidates)))
+    return max(pool, key=lambda i: (candidates[i]['score'], candidates[i]['is_common']))
 
 
 def _parse_xref_text(text):
@@ -132,15 +164,20 @@ def _resolve_reference(text, kanji_index, kana_index):
     """
     headword, reading, sense_num = _parse_xref_text(text)
     if reading:
-        writing_by_seq = {seq: (eid, fid) for seq, eid, fid in kanji_index.get(headword, [])}
-        reading_seqs = {seq for seq, eid, fid in kana_index.get(reading, [])}
-        candidates = set(writing_by_seq) & reading_seqs
-        if not candidates:
+        # A kanji headword can have more than one valid reading (e.g. 開く has
+        # both ひらく and あく) — match on the exact (headword, reading) pair,
+        # not just headword, or the wrong reading's form_id can come back for
+        # entries where kanji_index[headword] holds rows for several readings.
+        by_seq = {}
+        for seq, eid, fid, form_reading in kanji_index.get(headword, []):
+            if form_reading == reading:
+                by_seq.setdefault(seq, (eid, fid))
+        if not by_seq:
             return None, None, sense_num
-        chosen = min(candidates)
-        return writing_by_seq[chosen][0], writing_by_seq[chosen][1], sense_num
+        chosen = min(by_seq)
+        return by_seq[chosen][0], by_seq[chosen][1], sense_num
     combined = {}
-    for seq, eid, fid in kanji_index.get(headword, []):
+    for seq, eid, fid, _form_reading in kanji_index.get(headword, []):
         combined.setdefault(seq, (eid, fid))
     for seq, eid, fid in kana_index.get(headword, []):
         combined.setdefault(seq, (eid, fid))
@@ -167,8 +204,12 @@ def _insert_search_term(c, entry_id, form_id, text, normalized, script, priority
 def _pass1_forms(c, entries_dir, src, entities, tags):
     """Entry + EntryForm + FormTag + FormFuriganaSegment. Returns the indices pass 2 needs."""
     seq_to_entry_id = {}
-    kanji_index = defaultdict(list)  # text -> [(seq, entry_id, form_id), ...]
-    kana_index = defaultdict(list)
+    # text -> [(seq, entry_id, form_id, reading), ...]; reading distinguishes
+    # which of a kanji form's several valid readings each row is (needed by
+    # _resolve_reference to pick the right form_id for a "headword・reading"
+    # xref instead of collapsing all readings of one seq into one row).
+    kanji_index = defaultdict(list)
+    kana_index = defaultdict(list)  # text -> [(seq, entry_id, form_id), ...]
 
     count = 0
     for path in iter_json_files(entries_dir):
@@ -185,22 +226,55 @@ def _pass1_forms(c, entries_dir, src, entities, tags):
         entry_id = c.lastrowid
         seq_to_entry_id[seq] = entry_id
 
-        form_ord = 0
+        # Build every candidate form first (kanji x reading pairs, then kana
+        # forms) so is_primary can be chosen by score across the whole entry
+        # instead of by whichever form JMdict happens to list first.
+        pending = []
         for k in kanji_list:
             readings = _applicable_readings(k['text'], kana_list) or [None]
-            for reading_idx, reading in enumerate(readings):
-                c.execute(
-                    'INSERT INTO EntryForm '
-                    '(entry_id, ord, form_type, text, reading, is_primary, is_common, score) '
-                    "VALUES (?, ?, 'writing', ?, ?, ?, ?, ?)",
-                    (entry_id, form_ord, k['text'], reading, 1 if form_ord == 0 else 0,
-                     int(k['common']), _form_score(k['common'], k.get('tags', []))),
-                )
-                form_id = c.lastrowid
-                if k.get('furigana') and reading_idx == 0:
-                    segments = parse_bracket_furigana(k['furigana'])
-                elif reading:
-                    segments = _fallback_furigana_segments(k['text'], reading)
+            is_search_only = int(_SEARCH_ONLY_KANJI_TAG in k.get('tags', []))
+            furigana_by_reading = k.get('furiganaByReading') or {}
+            for reading in readings:
+                pending.append({
+                    'form_type': 'writing',
+                    'text': k['text'],
+                    'reading': reading,
+                    'is_common': int(k['common']),
+                    'score': _form_score(k['common'], k.get('tags', [])),
+                    'is_search_only': is_search_only,
+                    'tags': k.get('tags', []),
+                    'furigana': furigana_by_reading.get(reading) if reading else None,
+                })
+        for k in kana_list:
+            pending.append({
+                'form_type': 'reading',
+                'text': k['text'],
+                'reading': None,
+                'is_common': int(k['common']),
+                'score': _form_score(k['common'], k.get('tags', [])),
+                'is_search_only': int(_SEARCH_ONLY_KANA_TAG in k.get('tags', [])),
+                'tags': k.get('tags', []),
+                'furigana': None,
+            })
+
+        primary_idx = _select_primary(pending)
+
+        for form_ord, f in enumerate(pending):
+            c.execute(
+                'INSERT INTO EntryForm '
+                '(entry_id, ord, form_type, text, reading, is_primary, is_common, '
+                'is_search_only, score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (entry_id, form_ord, f['form_type'], f['text'], f['reading'],
+                 1 if form_ord == primary_idx else 0, f['is_common'],
+                 f['is_search_only'], f['score']),
+            )
+            form_id = c.lastrowid
+
+            if f['form_type'] == 'writing':
+                if f['furigana']:
+                    segments = parse_bracket_furigana(f['furigana'])
+                elif f['reading']:
+                    segments = _fallback_furigana_segments(f['text'], f['reading'])
                 else:
                     segments = []
                 for seg_ord, (base, ruby) in enumerate(segments):
@@ -209,30 +283,17 @@ def _pass1_forms(c, entries_dir, src, entities, tags):
                         'VALUES (?, ?, ?, ?)',
                         (form_id, seg_ord, base, ruby),
                     )
-                for t in k.get('tags', []):
-                    if is_priority_code(t):
-                        continue
-                    tag_id = tags.get_or_create('form', t, entities.get(t, t))
-                    c.execute('INSERT INTO FormTag (form_id, tag_id) VALUES (?, ?)', (form_id, tag_id))
-                kanji_index[k['text']].append((seq, entry_id, form_id))
-                form_ord += 1
 
-        for k in kana_list:
-            c.execute(
-                'INSERT INTO EntryForm '
-                '(entry_id, ord, form_type, text, is_primary, is_common, score) '
-                "VALUES (?, ?, 'reading', ?, ?, ?, ?)",
-                (entry_id, form_ord, k['text'], 1 if form_ord == 0 else 0,
-                 int(k['common']), _form_score(k['common'], k.get('tags', []))),
-            )
-            form_id = c.lastrowid
-            for t in k.get('tags', []):
+            for t in f['tags']:
                 if is_priority_code(t):
                     continue
                 tag_id = tags.get_or_create('form', t, entities.get(t, t))
                 c.execute('INSERT INTO FormTag (form_id, tag_id) VALUES (?, ?)', (form_id, tag_id))
-            kana_index[k['text']].append((seq, entry_id, form_id))
-            form_ord += 1
+
+            if f['form_type'] == 'writing':
+                kanji_index[f['text']].append((seq, entry_id, form_id, f['reading']))
+            else:
+                kana_index[f['text']].append((seq, entry_id, form_id))
 
         count += 1
         if count % 10000 == 0:
@@ -378,6 +439,51 @@ def _pass2_senses(c, entries_dir, translations_dir, entities, tags,
             print(f'  pass 2: {count} entries processed…', flush=True)
 
 
+def _resolve_reference_previews(c, preview_lang='eng', preview_gloss_limit=3):
+    """Fill in SenseReference.target_sense_id/preview_text for resolved xrefs/ants.
+
+    Must run after _pass2_senses has finished for every entry: a xref can point
+    at an entry that pass 2 had not reached yet in file order, so the target's
+    Sense/SenseGloss rows may not have existed at the time the reference itself
+    was inserted.
+
+    preview_lang is hardcoded to English: SenseReference lives in the
+    language-neutral core pack (see Database.md), while SenseGloss is
+    per-language, so a fully correct per-install-language preview would need a
+    bigger schema change (either duplicating SenseReference per language pack
+    or adding a preview_text_by_lang table). English is the one gloss language
+    guaranteed present, so it is a reasonable default until that is revisited.
+    """
+    rows = c.execute(
+        'SELECT reference_id, target_entry_id, target_sense_number '
+        'FROM SenseReference WHERE target_entry_id IS NOT NULL'
+    ).fetchall()
+    for reference_id, target_entry_id, target_sense_number in rows:
+        if target_sense_number is not None:
+            sense_row = c.execute(
+                'SELECT sense_id FROM Sense WHERE entry_id = ? AND source_ord = ? LIMIT 1',
+                (target_entry_id, target_sense_number - 1),
+            ).fetchone()
+        else:
+            sense_row = c.execute(
+                'SELECT sense_id FROM Sense WHERE entry_id = ? ORDER BY ord LIMIT 1',
+                (target_entry_id,),
+            ).fetchone()
+        if sense_row is None:
+            continue
+        target_sense_id = sense_row[0]
+        gloss_rows = c.execute(
+            "SELECT text FROM SenseGloss WHERE sense_id = ? AND lang = ? AND gloss_type = 'main' "
+            'ORDER BY ord LIMIT ?',
+            (target_sense_id, preview_lang, preview_gloss_limit),
+        ).fetchall()
+        preview_text = '; '.join(text for (text,) in gloss_rows) or None
+        c.execute(
+            'UPDATE SenseReference SET target_sense_id = ?, preview_text = ? WHERE reference_id = ?',
+            (target_sense_id, preview_text, reference_id),
+        )
+
+
 def _insert_search_terms(conn, c, entries_dir, seq_to_entry_id):
     """SearchTerm/SearchSuffix for every writing/reading form (needs form_ids from pass 1).
 
@@ -421,6 +527,9 @@ def process(gitmdict_dir, db_path):
     print('Pass 2: Sense/SenseGloss/SenseReference/FormRule…', flush=True)
     _pass2_senses(c, entries_dir, translations_dir, entities, tags,
                   seq_to_entry_id, kanji_index, kana_index)
+
+    print('Resolving cross-reference preview text…', flush=True)
+    _resolve_reference_previews(c)
 
     for rule, label in _RULE_LABELS.items():
         c.execute(

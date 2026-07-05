@@ -108,6 +108,75 @@ One searchable/renderable form. This is the central v2 table.
 JMdict writing forms are emitted per valid writing-reading pair. For example,
 `人気` can have separate rows for `にんき` and `ひとけ`.
 
+`is_primary` is set on exactly one row per entry: the highest-`(score,
+is_common)` candidate among rows that are not `is_search_only`, not simply the
+first form JMdict happens to list. `is_search_only` is set for JMdict
+`sK`/`sk`-tagged forms (search-only kanji/kana) — these remain valid
+`SearchTerm` rows but should never be shown as a headline or in an
+alternate-forms table; clients should filter `WHERE is_search_only = 0` when
+building anything user-visible from `EntryForm`.
+
+#### Building an Alternate-Forms Table
+
+`EntryForm` plus `FormTag` contain everything needed to build a Jitendex-style
+alternate-forms matrix (kanji forms as columns, readings as rows, cell
+validity/badges) without any further storage-format parsing.
+
+Columns — visible writing forms, in display order:
+
+```sql
+SELECT form_id, text
+FROM EntryForm
+WHERE entry_id = :entry_id AND form_type = 'writing' AND is_search_only = 0
+GROUP BY text
+ORDER BY MIN(ord);
+```
+
+Rows that bridge to at least one kanji column — readings that appear as the
+`reading` of some writing-form row:
+
+```sql
+SELECT DISTINCT reading
+FROM EntryForm
+WHERE entry_id = :entry_id AND form_type = 'writing'
+  AND reading IS NOT NULL AND is_search_only = 0;
+```
+
+Readings with no kanji bridge at all (JMdict `re_nokanji`-style readings) —
+belong in the `∅` column group instead of a normal row: every visible
+`form_type = 'reading'` row whose `text` never appears in the bridging-readings
+query above.
+
+```sql
+SELECT text
+FROM EntryForm
+WHERE entry_id = :entry_id AND form_type = 'reading' AND is_search_only = 0
+  AND text NOT IN (
+    SELECT reading FROM EntryForm
+    WHERE entry_id = :entry_id AND form_type = 'writing'
+      AND reading IS NOT NULL AND is_search_only = 0
+  );
+```
+
+Cell validity/badge for one (reading, kanji-form) pair — a cell is valid if a
+matching writing-form row exists; its badge comes from that row's `FormTag`
+rows (map `Tag.code` to a badge class client-side, e.g. `rK`/`rk` → rare,
+`iK`/`ik`/`io` → irregular, `oK`/`ok` → old):
+
+```sql
+SELECT f.form_id, t.code, t.label
+FROM EntryForm f
+LEFT JOIN FormTag ft ON ft.form_id = f.form_id
+LEFT JOIN Tag t ON t.tag_id = ft.tag_id
+WHERE f.entry_id = :entry_id AND f.form_type = 'writing'
+  AND f.text = :kanji_form AND f.reading = :reading;
+```
+
+If the whole entry has exactly one writing form and one bridging reading (the
+common case), clients should omit the alternate-forms table entirely rather
+than render a trivial one-cell matrix — this can be decided from the row
+counts above without any additional query.
+
 ### `FormFuriganaSegment`
 
 Display-ready ruby segments for a form.
@@ -146,6 +215,16 @@ Tables:
 | `SenseReference` | Cross-references and antonyms with resolved targets where possible |
 
 `SenseAppliesToForm` lets the app filter senses using the matched `form_id`.
+
+`SenseReference.target_sense_id` and `.preview_text` are populated for every
+reference that resolves to a `target_entry_id`: `target_sense_id` points at
+the specific sense named by a `headword・reading・N` xref suffix, or the
+target entry's first sense otherwise; `preview_text` is that sense's
+semicolon-joined `main`-type English glosses, so clients can render a
+Jitendex-style target preview without an extra join at render time. Note this
+preview is always in English regardless of the installed gloss language pack,
+since `SenseReference` lives in the language-neutral core pack while
+`SenseGloss` is per-language.
 
 ### Deinflection
 
@@ -312,6 +391,13 @@ This pack is optional because JMnedict is very large.
 
 `EntryExample.sense_id` is populated when the Tatoeba index supplies a sense
 number and the target sense can be resolved.
+
+Examples are ranked and capped per entry at build time: candidate sentences
+are sorted by Japanese sentence character length (shorter first) and only the
+best 8 per entry are kept. `EntryExample.ord` reflects this rank — `0` is the
+best/first example to show — so clients can simply `ORDER BY ord` and take
+as many as their UI has room for, instead of implementing their own
+selection or ranking policy.
 
 ## App Attachment Model
 

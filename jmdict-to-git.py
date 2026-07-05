@@ -432,13 +432,12 @@ def apply_patch(data, patch):
             data[key] = value
 
 
-def _find_reading(kanji_text, kana_list):
-    """Return the first kana reading that applies to kanji_text."""
-    for k in kana_list:
-        applies = k.get('appliesToKanji', ['*'])
-        if '*' in applies or kanji_text in applies:
-            return k['text']
-    return None
+def _applicable_readings(kanji_text, kana_list):
+    """Return every kana reading (in kana_list order) that applies to kanji_text."""
+    return [
+        k['text'] for k in kana_list
+        if '*' in k.get('appliesToKanji', ['*']) or kanji_text in k.get('appliesToKanji', ['*'])
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -538,8 +537,14 @@ def parse_entry(elem, knowledge=None):
             })
 
     for k in kanji:
-        reading = _find_reading(k['text'], kana)
+        readings = _applicable_readings(k['text'], kana)
+        reading = readings[0] if readings else None
         k['furigana'] = compute_furigana(k['text'], reading, knowledge) if reading else None
+        # One solved furigana string per applicable reading, not just the first —
+        # a kanji form with more than one valid reading (e.g. 人気 -> にんき /
+        # ひとけ) needs real per-character ruby for each of them, not just the
+        # first one jmdict-to-sumatora-db.py happens to look up.
+        k['furiganaByReading'] = {r: compute_furigana(k['text'], r, knowledge) for r in readings}
 
     return seq, kanji, kana, eng_senses, lang_glosses
 
