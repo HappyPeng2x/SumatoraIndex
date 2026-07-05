@@ -167,9 +167,10 @@ def main(argv):
             '-o', gitjidic2_dir,
             '--cache', kanjidic2_cache)
 
-        print('--- Step 2: jmnedict-to-git ---', flush=True)
+        print('--- Step 2: jmnedict-to-git (informed furigana) ---', flush=True)
         run(script('jmnedict-to-git.py'),
             '-o', gitnedict_dir,
+            '--kanjidic2', gitjidic2_dir,
             '--cache', jmnedict_cache)
 
         print('--- Step 3: jmdict-to-git (informed furigana) ---', flush=True)

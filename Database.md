@@ -348,10 +348,16 @@ Important tables:
 | Table | Purpose |
 |---|---|
 | `Entry` | `entry_type='name'` |
-| `EntryForm` | name writings/readings |
+| `EntryForm` | name writings/readings, one row per valid kanji/reading pair (same expansion as JMdict words) |
+| `FormFuriganaSegment` | display-ready ruby for name kanji forms, when built with `--kanjidic2` |
 | `NameTranslation` | name translations |
 | `EntryTag` / `Tag` | name type tags |
 | `SearchTerm` / `SearchTermFts` | name search |
+
+`EntryForm.is_primary` for names is chosen by `is_common`, same as words —
+not by JMnedict source order. JMnedict doesn't carry JMdict's finer-grained
+irregular-form tags (`iK`/`rK`/`io`), so there is no `is_search_only`
+equivalent for names.
 
 This pack is optional because JMnedict is very large.
 

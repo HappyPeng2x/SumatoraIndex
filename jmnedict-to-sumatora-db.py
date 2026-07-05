@@ -8,12 +8,19 @@ NameTranslation for the flat translation list and EntryTag(category='name_type')
 for JMnedict's name-type codes (place, person, surname, ...).
 
     Entry(entry_type='name')
-    EntryForm(form_type='writing'|'reading')
+    EntryForm(form_type='writing'|'reading')  — one row per valid kanji/reading
+                                                 pair, same expansion jmdict uses
     FormTag           — informational kanji tags only (priority codes drive is_common)
+    FormFuriganaSegment — from jmnedict-to-git.py's furiganaByReading, when built with --kanjidic2
     NameTranslation
     EntryTag          — category='name_type'
     Tag               — category='name_type', label from gitnedict's metadata.json entities
     SearchTerm        — one row per writing/reading form
+
+is_primary is chosen by is_common across all of an entry's candidate forms
+(buffered before insertion), not by JMnedict source order — mirrors the same
+fix in jmdict-to-sumatora-db.py, since a name entry can list an uncommon
+kanji form before its common one.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -30,7 +37,19 @@ import json
 import sys
 
 import sumatora_schema
-from sumatora_common import TagCache, hira_to_kata, is_priority_code, iter_json_files
+from furigana_solver import applicable_readings
+from sumatora_common import TagCache, hira_to_kata, is_priority_code, iter_json_files, parse_bracket_furigana
+
+
+def _select_primary(candidates):
+    """Return the index of the candidate that should be is_primary.
+
+    Chosen by is_common; ties keep the earliest candidate (same tie-break as
+    jmdict-to-sumatora-db.py's _select_primary when it has nothing else to
+    go on — JMnedict doesn't carry the finer-grained irregular-form tags
+    JMdict does, so is_common is the only signal worth ranking on here).
+    """
+    return max(range(len(candidates)), key=lambda i: candidates[i]['is_common'])
 
 
 def process(gitnedict_dir, db_path):
@@ -56,17 +75,55 @@ def process(gitnedict_dir, db_path):
         )
         entry_id = c.lastrowid
 
-        ord_ = 0
+        kana_list = entry.get('kana', [])
+
+        # Buffer every candidate form first so is_primary can be chosen by
+        # is_common across the whole entry instead of by JMnedict source order.
+        pending = []
         for k in entry.get('kanji', []):
             is_common = bool([t for t in k.get('tags', []) if is_priority_code(t)])
+            readings = applicable_readings(k['text'], kana_list) or [None]
+            furigana_by_reading = k.get('furiganaByReading') or {}
+            for reading in readings:
+                pending.append({
+                    'form_type': 'writing',
+                    'text': k['text'],
+                    'reading': reading,
+                    'is_common': int(is_common),
+                    'tags': k.get('tags', []),
+                    'furigana': furigana_by_reading.get(reading) if reading else None,
+                })
+        for r in kana_list:
+            pending.append({
+                'form_type': 'reading',
+                'text': r['text'],
+                'reading': None,
+                'is_common': 0,
+                'tags': [],
+                'furigana': None,
+            })
+
+        primary_idx = _select_primary(pending) if pending else None
+
+        for ord_, f in enumerate(pending):
             c.execute(
                 'INSERT INTO EntryForm '
-                '(entry_id, ord, form_type, text, is_primary, is_common) '
-                "VALUES (?, ?, 'writing', ?, ?, ?)",
-                (entry_id, ord_, k['text'], 1 if ord_ == 0 else 0, int(is_common)),
+                '(entry_id, ord, form_type, text, reading, is_primary, is_common) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (entry_id, ord_, f['form_type'], f['text'], f['reading'],
+                 1 if ord_ == primary_idx else 0, f['is_common']),
             )
             form_id = c.lastrowid
-            for t in k.get('tags', []):
+
+            if f['furigana']:
+                for seg_ord, (base, ruby) in enumerate(parse_bracket_furigana(f['furigana'])):
+                    c.execute(
+                        'INSERT INTO FormFuriganaSegment (form_id, ord, base, ruby) '
+                        'VALUES (?, ?, ?, ?)',
+                        (form_id, seg_ord, base, ruby),
+                    )
+
+            for t in f['tags']:
                 if is_priority_code(t):
                     continue
                 label = entities.get(t, t)
@@ -75,19 +132,9 @@ def process(gitnedict_dir, db_path):
                     'INSERT INTO FormTag (form_id, tag_id) VALUES (?, ?)',
                     (form_id, tag_id),
                 )
-            _insert_search_term(c, entry_id, form_id, k['text'], 'writing', is_common)
-            ord_ += 1
 
-        for r in entry.get('kana', []):
-            c.execute(
-                'INSERT INTO EntryForm '
-                '(entry_id, ord, form_type, text, is_primary, is_common) '
-                "VALUES (?, ?, 'reading', ?, ?, 0)",
-                (entry_id, ord_, r['text'], 1 if ord_ == 0 else 0),
-            )
-            form_id = c.lastrowid
-            _insert_search_term(c, entry_id, form_id, r['text'], 'kana', False)
-            ord_ += 1
+            script = 'writing' if f['form_type'] == 'writing' else 'kana'
+            _insert_search_term(c, entry_id, form_id, f['text'], script, bool(f['is_common']))
 
         for ord_t, text in enumerate(entry.get('translations', [])):
             c.execute(
