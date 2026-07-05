@@ -1,472 +1,385 @@
 # Sumatora Database Structure
 
-Five SQLite databases are distributed:
+This document describes the schema-v2 database layout used by
+`build-sumatora-db.py` and `split-sumatora-packs.py`.
 
-| File | Built by | Contents |
-|------|----------|----------|
-| `jmdict.db` | `gitmdict-to-sqlite.py` | Dictionary entries, proper names, FTS5 indexes |
-| `{lang}.db` | `gitmdict-to-sqlite.py` | Per-language gloss translations + FTS5 |
-| `examples_{lang}.db` | `gitoeba-to-sqlite.py` | Tatoeba example sentences linked to entries |
-| `kanjidic2.db` | `gitjidic2-to-sqlite.py` | Kanji character metadata |
-| `pitch.db` | `gitch-to-sqlite.py` | Pitch accent data |
+The build still preserves the git-friendly pipeline:
 
----
-
-## jmdict.db
-
-### DictionaryEntry
-
-The main entry table. One row per JMdict entry.
-
-| Column | Type | Description |
-|---|---|---|
-| `seq` | INTEGER PK | JMdict sequence number |
-| `readingsPrio` | TEXT | Space-separated **priority** kana readings |
-| `readings` | TEXT | Space-separated non-priority kana readings |
-| `writingsPrio` | TEXT | Space-separated **priority** kanji writings |
-| `writings` | TEXT | Space-separated non-priority kanji writings |
-| `pos` | TEXT | JSON: per-sense arrays of part-of-speech codes |
-| `xref` | TEXT | JSON: per-sense arrays of resolved cross-references (see format below) |
-| `ant` | TEXT | JSON: per-sense arrays of resolved antonyms (same format as `xref`) |
-| `misc` | TEXT | JSON: per-sense miscellaneous info |
-| `lsource` | TEXT | JSON: per-sense language source info (see format below) |
-| `dial` | TEXT | JSON: per-sense dialect codes |
-| `s_inf` | TEXT | JSON: per-sense sense information strings |
-| `field` | TEXT | JSON: per-sense field domain codes |
-| `kanjiData` | TEXT | JSON: full kanji element array (see format below) |
-| `kanaData` | TEXT | JSON: full kana element array (see format below) |
-| `stagk` | TEXT | JSON: per-sense kanji form restrictions (NULL when unrestricted) |
-| `stagr` | TEXT | JSON: per-sense reading form restrictions (NULL when unrestricted) |
-| `furigana` | TEXT | JSON: map from kanji writing form to bracket-notation furigana string (see format below) |
-| `rules` | TEXT | Space-separated deinflection rule codes, or NULL for uninflectable entries |
-| `score` | INTEGER | Headword score: `+1` priority, `0` standard, `-1` irregular/rare |
-
-**Indexes:**
-- `DictionaryEntryRules ON DictionaryEntry (rules)` — for deinflection lookup
-- `DictionaryEntryScore ON DictionaryEntry (score)` — for score-ordered result ranking
-
-#### `kanjiData` format
-
-Array of kanji element objects in the order they appear in JMdict (priority forms first, then non-priority). Each object:
-
-```json
-[
-  {"text": "漢字形", "common": true, "tags": ["ichi1", "news1"]},
-  {"text": "旧字体", "common": false, "tags": ["iK", "rK"]}
-]
+```text
+XML/source data -> JSON repositories -> monolithic sumatora.db -> installable packs
 ```
 
-`tags` contains both priority codes (`ke_pri`: `ichi1`, `news1`, `nf*`, `spec1`, `spec2`, `gai1`, `gai2`) and information codes (`ke_inf`: `iK` irregular kanji, `io` outdated, `rK` rarely-used kanji, `oK` out-dated kanji, `ateji`).
+The monolithic `sumatora.db` is useful for validation and pack generation. Phone
+distribution should use packs.
 
-#### `kanaData` format
+## Pack Files
 
-Array of kana element objects in the same order as the source. Each object:
+Default English install:
 
-```json
-[
-  {"text": "よみかた", "common": true, "tags": ["ichi1"], "appliesToKanji": ["*"], "nokanji": false},
-  {"text": "よみがな", "common": false, "tags": ["ok"], "appliesToKanji": ["漢字形"], "nokanji": false}
-]
-```
+| File | Required | Contents |
+|---|---:|---|
+| `sumatora_core.db` | yes | JMdict word entries, forms, senses, tags, furigana, references, form rules, exact/prefix search |
+| `sumatora_gloss_eng.db` | yes for English | English glosses and English reverse-search FTS |
 
-- `appliesToKanji`: list of kanji text values this reading applies to, or `["*"]` for all.
-- `nokanji`: true when this reading is valid for the entry even without any kanji form (`<re_nokanji/>`).
-- `tags` contains both `re_pri` priority codes and `re_inf` info codes (`ik` irregular kana, `ok` outdated, `gikun` gikun/jukujikun reading, etc.).
+Optional packs:
 
-#### `lsource` format
-
-```json
-[[{"lang": "fra", "text": "mot", "full": true, "wasei": false}], []]
-```
-
-Outer array is per-sense; inner array is the language source list for that sense. Each object has `lang` (ISO 639-2), `text` (source word, may be empty), `full` (true = fully sourced, false = partial/`ls_type=part`), `wasei` (true = wasei-eigo).
-
-#### `stagk` / `stagr` format
-
-Per-sense arrays of form strings; NULL when every sense is unrestricted.
-
-```json
-[[], ["漢字形1"], []]
-```
-
-#### `furigana` format
-
-JSON object mapping each kanji writing form to its bracket-notation furigana string. NULL when the entry has no kanji forms.
-
-```json
-{"食べ物": "食[た]べ物[もの]", "食物": "食[しょく]物[もつ]"}
-```
-
-Bracket notation: `base[ruby]` for kanji runs, plain text for kana runs.  To display headword ruby, look up the matched writing form in this map.
-
-#### `xref` / `ant` format
-
-Outer array indexed by sense (parallel to `pos`). Each element is an array of reference objects. References with a known `seq` have been resolved to a concrete entry; those without could not be resolved (display as plain text).
-
-```json
-[
-  [{"text": "来る", "seq": 1547720}],
-  [{"text": "行く", "seq": 1289010, "sense": 2}]
-]
-```
-
-| Field | Type | Always present | Meaning |
-|-------|------|----------------|---------|
-| `text` | string | yes | Display form (kanji or kana) |
-| `seq` | integer | no | Target entry sequence number |
-| `sense` | integer | no | 1-based sense number within the target entry |
-
-#### `rules` values
-
-| Code | Part of speech |
-|------|----------------|
-| `v1` | Ichidan verb (食べる) |
-| `v5` | Godan verb (書く, 飲む, …) |
-| `vk` | Irregular くる |
-| `vs` | Suru-verb (勉強する) |
-| `vz` | Zuru-verb (感ずる) |
-| `adj-i` | I-adjective (高い) |
-
-Multiple codes are space-separated, e.g. `"v1 vs"` for 〜する variants of ichidan verbs.
-
----
-
-### DictionaryIndex (FTS5, contentless)
-
-FTS5 virtual table used for fast reading/writing lookup. **Contentless** (`content=""`): it stores only the FTS5 token index, not the original text. Column values must be retrieved from `DictionaryEntry`.
-
-The `rowid` of each FTS5 row equals the `seq` of the corresponding `DictionaryEntry` row, so a MATCH result can be joined directly:
-
-```sql
-SELECT DictionaryEntry.*
-FROM DictionaryEntry
-WHERE seq IN (SELECT rowid FROM DictionaryIndex WHERE writingsPrio MATCH ?)
-ORDER BY DictionaryEntry.score DESC
-```
-
-| Column | Description |
+| File | Contents |
 |---|---|
-| `readingsPrioKana` | Priority readings converted to katakana |
-| `readingsPrioKanaParts` | Space-separated katakana suffixes of each priority reading (enables substring search) |
-| `readingsKana` | Non-priority readings converted to katakana |
-| `readingsKanaParts` | Katakana suffixes of non-priority readings |
-| `writingsPrio` | Priority kanji writings (verbatim) |
-| `writingsPrioParts` | Character suffixes of each priority writing |
-| `writings` | Non-priority kanji writings |
-| `writingsParts` | Character suffixes of non-priority writings |
+| `sumatora_search_suffix.db` | suffix/substring search support for word forms |
+| `sumatora_names.db` | JMnedict names, name translations, name-type tags, name search |
+| `sumatora_pitch.db` | pitch accent rows and links to word forms |
+| `sumatora_kanji.db` | KANJIDIC2 character details and kanji search |
+| `sumatora_examples_{lang}.db` | Tatoeba examples, segmented Japanese text, matched token, optional `sense_id` |
+| `sumatora_gloss_{lang}.db` | one language's glosses and reverse-search FTS |
 
-**Suffix-parts columns** store all suffixes starting from position 1 of each token (e.g. `カタカナ` → `タカナ カナ ナ`). A `MATCH term*` on a parts column finds entries where `term` appears as a substring within the original word.
+Measured English pack output from `/tmp/sumatora-packs-eng`:
 
-**All kana columns store katakana.** Hiragana in the source data is converted to katakana before indexing. Search queries against these columns must also be katakana.
+| File | Size | zstd `-6` |
+|---|---:|---:|
+| `sumatora_core.db` | 240M | 82M |
+| `sumatora_gloss_eng.db` | 53M | 21M |
+| `sumatora_search_suffix.db` | 272M | 88M |
+| `sumatora_names.db` | 418M | 124M |
+| `sumatora_pitch.db` | 52M | 15M |
+| `sumatora_kanji.db` | 8.3M | 2.8M |
+| `sumatora_examples_eng.db` | 5.6M | 2.4M |
 
----
+The default English install is therefore about `293M` uncompressed, or `103M`
+compressed before any app-specific packaging overhead.
 
-### DictionaryEntity
+## Core Pack
 
-JMdict XML entity definitions (e.g. `v5k` → `"Godan verb with ku ending"`).
+`sumatora_core.db` contains language-neutral JMdict word display and forward
+search.
+
+### `BuildMetadata`
 
 | Column | Type | Description |
 |---|---|---|
-| `name` | TEXT PK | Entity code |
-| `content` | TEXT | Human-readable expansion |
+| `key` | TEXT PK | Metadata key |
+| `value` | TEXT | Metadata value |
 
----
+Important keys include `schema_version`, source counts, build timestamp, and
+source version identifiers when available.
 
-### DictionaryControl
+### `DataSource`
 
-Key/value metadata for the database build.
+Source attribution table.
 
 | Column | Type |
 |---|---|
-| `control` | TEXT PK |
-| `value` | INTEGER |
+| `source_id` | INTEGER PK |
+| `code` | TEXT UNIQUE |
+| `name` | TEXT |
+| `url` | TEXT |
+| `license` | TEXT |
+| `attribution` | TEXT |
 
-Rows present after a standard build:
+### `Entry`
 
-| `control` | Meaning |
-|-----------|---------|
-| `build_timestamp` | Unix epoch (seconds) when the database was built |
-| `format_version` | Schema/format version number (currently `1`) |
-| `entry_count` | Number of rows in `DictionaryEntry` |
-
-Consumers should check `format_version` on database open and refuse to use an unrecognized version.
-
----
-
-### ProperNounEntry
-
-One row per JMnedict entry (people, places, organisations, etc.).
+One renderable dictionary entry.
 
 | Column | Type | Description |
 |---|---|---|
-| `seq` | INTEGER PK | JMnedict sequence number |
-| `readings` | TEXT | Space-separated kana readings |
-| `writings` | TEXT | Space-separated kanji writings; empty string `''` for kana-only names |
-| `types` | TEXT | JSON array of name type strings (see below) |
-| `translations` | TEXT | JSON array of translation strings |
+| `entry_id` | INTEGER PK | Internal stable row id |
+| `source_id` | INTEGER | Source table id |
+| `source_key` | TEXT | JMdict sequence number as text |
+| `entry_type` | TEXT | `word` in core |
+| `sort_key` | TEXT | Optional sort key |
+| `score` | INTEGER | Entry-level score |
 
-Common `types` values: `place`, `person`, `given`, `surname`, `station`, `company`, `org`, `product`, `work`.
+### `EntryForm`
 
----
-
-### ProperNounIndex (FTS5, contentless)
-
-FTS5 virtual table for proper name lookup. Rowid equals `ProperNounEntry.rowid` (which equals `seq`).
-
-```sql
-CREATE VIRTUAL TABLE ProperNounIndex USING fts5(
-    readingsKana, readingsKanaParts,
-    writings, writingsParts,
-    content="")
-```
-
-Column layout mirrors `DictionaryIndex` (kana in katakana, suffix-parts columns for substring search). Apply the same tier search strategy as for `DictionaryIndex`.
-
----
-
-## {lang}.db  (e.g. eng.db, ger.db)
-
-### DictionaryTranslation
-
-One row per sense per entry. `gloss` contains all glosses for a single sense joined with `, `.
+One searchable/renderable form. This is the central v2 table.
 
 | Column | Type | Description |
 |---|---|---|
-| `seq` | INTEGER | JMdict sequence number (foreign key to DictionaryEntry.seq) |
-| `gloss_id` | INTEGER | Sense index within the entry (0-based) |
-| `gloss` | TEXT | Comma-joined gloss strings for this sense |
-| PRIMARY KEY | (seq, gloss_id) | |
+| `form_id` | INTEGER PK |
+| `entry_id` | INTEGER |
+| `ord` | INTEGER | Source/display order |
+| `form_type` | TEXT | `writing` or `reading` |
+| `text` | TEXT | Written/kana form |
+| `reading` | TEXT | Reading for writing forms when known |
+| `is_primary` | INTEGER | Primary display form |
+| `is_common` | INTEGER | Priority/common marker |
+| `is_search_only` | INTEGER | Search-only redirect/variant marker |
+| `score` | INTEGER | Form-level score |
 
-### DictionaryTranslationIndex (FTS5, content table)
+JMdict writing forms are emitted per valid writing-reading pair. For example,
+`人気` can have separate rows for `にんき` and `ひとけ`.
 
-FTS5 virtual table backed by `DictionaryTranslation`. The `rowid` of the FTS5 row equals the `rowid` of the corresponding `DictionaryTranslation` row (the implicit SQLite rowid, not `seq`).
+### `FormFuriganaSegment`
 
-```sql
-CREATE VIRTUAL TABLE DictionaryTranslationIndex USING fts5(gloss, content="DictionaryTranslation")
-```
+Display-ready ruby segments for a form.
 
-To find entries matching a gloss term:
+| Column | Type |
+|---|---|
+| `form_id` | INTEGER |
+| `ord` | INTEGER |
+| `base` | TEXT |
+| `ruby` | TEXT nullable |
 
-```sql
-SELECT dt.seq
-FROM DictionaryTranslationIndex AS fts
-JOIN DictionaryTranslation AS dt ON dt.rowid = fts.rowid
-WHERE fts.gloss MATCH ?
-```
+Clients should render this directly instead of parsing bracket furigana.
 
----
+### Tags
 
-## examples_{lang}.db  (e.g. examples_eng.db)
+Tables:
 
-Built by `gitoeba-to-sqlite.py` from a Tatoeba sentence corpus linked to JMdict entries.
+| Table | Purpose |
+|---|---|
+| `Tag` | Shared tag dictionary |
+| `FormTag` | Tags attached to forms |
+| `EntryTag` | Tags attached to entries |
+| `SenseGroupTag` | POS/misc/field/dialect tags attached to sense groups |
 
-### ExamplePairs
+### Senses
 
-One row per (entry, sentence) link.
+Tables:
 
-| Column | Type | Description |
-|---|---|---|
-| `seq` | INTEGER | JMdict sequence number |
-| `sentence_id` | INTEGER | Tatoeba sentence ID |
-| `sentence` | TEXT | Japanese sentence text (with `{expression;reading}` furigana markup, covering every kanji in the sentence — see §14 in Algorithms.md) |
-| `translation` | TEXT | Translation in the target language |
-| `matched_token` | TEXT | Surface writing of the token that caused this sentence to be linked to the entry |
+| Table | Purpose |
+|---|---|
+| `SenseGroup` | Ordered display grouping |
+| `Sense` | One sense row |
+| `SenseNote` | Sense information notes |
+| `SenseLanguageSource` | Loanword/source-language details |
+| `SenseAppliesToForm` | Replacement for `stagk`/`stagr` parsing |
+| `SenseReference` | Cross-references and antonyms with resolved targets where possible |
 
-### ExamplesSummary (VIEW)
+`SenseAppliesToForm` lets the app filter senses using the matched `form_id`.
 
-Aggregates `ExamplePairs` to one row per `seq` (entry), collecting all sentences into parallel JSON arrays.
+### Deinflection
 
-```sql
-CREATE VIEW ExamplesSummary AS
-    SELECT seq,
-           json_group_array(sentence)      AS sentences,
-           json_group_array(translation)   AS translations,
-           json_group_array(matched_token) AS matched_tokens
-    FROM ExamplePairs
-    GROUP BY seq
-```
+| Table | Purpose |
+|---|---|
+| `FormRule` | Rules valid for each form |
+| `DeinflectionRule` | Rule labels |
 
-`sentences`, `translations`, and `matched_tokens` are parallel JSON arrays of the same length: `sentences[i]` is paired with `translations[i]`, and `matched_tokens[i]` is the surface writing of the token that linked that specific sentence to the entry.
+The app still generates deinflection candidates. The DB verifies whether the
+matched `form_id` supports a candidate rule.
 
----
+### Forward Search
 
-## kanjidic2.db
+#### `SearchTerm`
 
-Built by `gitjidic2-to-sqlite.py` from a gitjidic2 JSON repository (produced by `kanjidic2-to-git.py`).
-
-### KanjiEntry
-
-One row per kanji character.
-
-| Column | Type | Description |
-|---|---|---|
-| `char` | TEXT PK | Single kanji character |
-| `"on"` | TEXT | Space-separated on readings (katakana) — column name is SQL-quoted because `on` is a reserved word |
-| `kun` | TEXT | Space-separated kun readings (hiragana; okurigana after `.`) |
-| `meanings` | TEXT | JSON array of English meaning strings |
-| `strokes` | INTEGER | Stroke count (NULL if absent) |
-| `grade` | INTEGER | School grade: 1–6 kyōiku, 8 jōyō/jinmeiyō; NULL otherwise |
-| `jlpt` | INTEGER | Old JLPT level 1–4 (4 = N5, 1 = N1); NULL if not listed |
-| `freq` | INTEGER | Newspaper frequency rank; NULL if not listed |
-| `radical` | INTEGER | Classical radical number |
-
-### KanjiControl
-
-| `control` | Meaning |
-|-----------|---------|
-| `build_timestamp` | Unix epoch when the database was built |
-| `char_count` | Number of rows in `KanjiEntry` |
-
----
-
-## pitch.db
-
-Built by `gitch-to-sqlite.py` from a gitch JSON repository.  The gitch repo is
-populated in two layers: `unidic-to-git.py` writes the base layer from the
-UniDic binary dictionary (~203k words), and the optional `pitch-to-git.py`
-overlays curated TSV data on top (curated entries overwrite UniDic entries for
-the same word).
-
-### PitchAccent
-
-One row per (word, reading) pair. Multiple valid pitch patterns for the same pair are merged into a single row.
+One searchable form.
 
 | Column | Type | Description |
 |---|---|---|
-| `word` | TEXT | Dictionary headword (kanji or kana surface form) |
-| `reading` | TEXT | Hiragana reading |
-| `pitches` | TEXT | JSON array of integer pitch drop positions |
-| PRIMARY KEY | (word, reading) | |
+| `search_id` | INTEGER PK |
+| `entry_id` | INTEGER |
+| `form_id` | INTEGER nullable |
+| `term` | TEXT |
+| `normalized` | TEXT |
+| `script` | TEXT | `writing`, `kana`, `romaji`, `gloss`, `name` |
+| `priority` | INTEGER |
+| `score` | INTEGER |
+| `is_prefix_searchable` | INTEGER |
+| `is_substring_searchable` | INTEGER |
 
-**Index:** `PitchAccentReading ON PitchAccent (reading)` — for reading-only lookup when no kanji form is known.
+#### `SearchTermFts`
 
-**Pitch position encoding:**
-- `0` — heiban: rises after mora 1, stays high (LH…H)
-- `1` — atamadaka: drops after mora 1 (HL…L)
-- `N` — drops after mora N; if N equals the mora count of the reading the word is odaka (LH…HL)
-
-### PitchControl
-
-| `control` | Meaning |
-|-----------|---------|
-| `build_timestamp` | Unix epoch when the database was built |
-| `entry_count` | Number of rows in `PitchAccent` |
-
----
-
-## How apps consume the databases
-
-The main databases are opened individually; the language database is ATTACHed:
+FTS5 index over `SearchTerm`.
 
 ```sql
-ATTACH DATABASE '/path/to/eng.db' AS "eng"
--- then query as: DictionaryEntry, eng.DictionaryTranslation, eng.DictionaryTranslationIndex
+CREATE VIRTUAL TABLE SearchTermFts USING fts5(
+    term,
+    normalized,
+    content='SearchTerm',
+    content_rowid='search_id',
+    columnsize=0
+);
 ```
 
-For examples, attach separately:
+`columnsize=0` keeps FTS matching but avoids FTS docsize storage.
+
+## Gloss Language Packs
+
+`sumatora_gloss_{lang}.db` contains one language's translations.
+
+### `Sense`
+
+A minimal copy of `Sense` is kept so `SenseGloss.sense_id` can be resolved to
+`entry_id` inside the language pack.
+
+### `SenseGloss`
+
+| Column | Type |
+|---|---|
+| `sense_id` | INTEGER |
+| `lang` | TEXT |
+| `ord` | INTEGER |
+| `text` | TEXT |
+| `gloss_type` | TEXT |
+
+### `GlossSearchFts`
+
+Reverse gloss search FTS. It indexes `SenseGloss` directly; there is no separate
+duplicated `GlossSearch` content table.
 
 ```sql
-ATTACH DATABASE '/path/to/examples_eng.db' AS "examples_eng"
--- then join: LEFT JOIN examples_eng.ExamplesSummary ON DictionaryEntry.seq = ExamplesSummary.seq
+CREATE VIRTUAL TABLE GlossSearchFts USING fts5(
+    text,
+    content='SenseGloss',
+    content_rowid='rowid',
+    columnsize=0
+);
 ```
 
-### Search strategy (priority order)
+Example reverse-search query:
 
-Forward search steps (stopping when enough results are found), results ordered by `DictionaryEntry.score DESC` within each tier:
+```sql
+SELECT sg.sense_id, s.entry_id, sg.text
+FROM gloss_eng.GlossSearchFts AS f
+JOIN gloss_eng.SenseGloss AS sg ON sg.rowid = f.rowid
+JOIN gloss_eng.Sense AS s ON s.sense_id = sg.sense_id
+WHERE GlossSearchFts MATCH ?;
+```
 
-1. `writingsPrio MATCH term` — exact kanji, priority
-2. `readingsPrioKana MATCH kata` — exact kana, priority
-3. `writings MATCH term` — exact kanji, non-priority
-4. `readingsKana MATCH kata` — exact kana, non-priority
-5. `writingsPrio MATCH term*` — prefix kanji, priority
-6. `readingsPrioKana MATCH kata*` — prefix kana, priority
-7. `writings MATCH term*` — prefix kanji, non-priority
-8. `readingsKana MATCH kata*` — prefix kana, non-priority
-9. `writingsPrioParts MATCH term*` — substring kanji, priority
-10. `readingsPrioKanaParts MATCH kata*` — substring kana, priority
-11. `writingsParts MATCH term*` — substring kanji, non-priority
-12. `readingsKanaParts MATCH kata*` — substring kana, non-priority
-13. `DictionaryTranslationIndex.gloss MATCH term` — exact gloss
-14. `DictionaryTranslationIndex.gloss MATCH term*` — prefix gloss
+## Suffix Search Pack
 
-`kata` is the search term normalized to katakana (hiragana is converted before querying).
+`sumatora_search_suffix.db` contains fast substring/suffix lookup.
 
-Apply the same tier strategy to `ProperNounIndex` for proper name lookup, and display the results in a separate section.
+### `SearchTerm`
 
----
+Word-only `SearchTerm` rows needed to interpret suffix hits.
 
-## Building the databases
+### `SearchSuffix`
 
-### Full build (recommended)
+| Column | Type |
+|---|---|
+| `search_id` | INTEGER |
+| `suffix` | TEXT |
+
+Indexes:
+
+```sql
+CREATE INDEX SearchSuffixText ON SearchSuffix(suffix);
+```
+
+This pack is optional because it is large. Without it, exact, prefix, kana, and
+deinflection search still work from `sumatora_core.db`; fast substring search is
+disabled or must use a slower fallback.
+
+## Names Pack
+
+`sumatora_names.db` contains proper names from JMnedict.
+
+Important tables:
+
+| Table | Purpose |
+|---|---|
+| `Entry` | `entry_type='name'` |
+| `EntryForm` | name writings/readings |
+| `NameTranslation` | name translations |
+| `EntryTag` / `Tag` | name type tags |
+| `SearchTerm` / `SearchTermFts` | name search |
+
+This pack is optional because JMnedict is very large.
+
+## Pitch Pack
+
+`sumatora_pitch.db` contains pitch accents.
+
+| Table | Purpose |
+|---|---|
+| `PitchAccent` | `(word, reading, source_id)` |
+| `PitchPattern` | ordered pitch drop positions |
+| `FormPitch` | links pitch rows to core `form_id` values |
+
+`FormPitch.confidence` is `exact` or `reading_fallback`.
+
+## Kanji Pack
+
+`sumatora_kanji.db` contains KANJIDIC2 details.
+
+| Table | Purpose |
+|---|---|
+| `Entry` / `EntryForm` | kanji lookup rows |
+| `KanjiEntry` | strokes, grade, JLPT, frequency, radical |
+| `KanjiReading` | on/kun/nanori readings |
+| `KanjiMeaning` | meanings by language |
+| `SearchTerm` / `SearchTermFts` | kanji search |
+
+## Example Packs
+
+`sumatora_examples_{lang}.db` contains Tatoeba examples for one language.
+
+| Table | Purpose |
+|---|---|
+| `Example` | translated example sentence metadata |
+| `ExampleSegment` | display-ready Japanese sentence ruby segments |
+| `EntryExample` | links examples to entries and optionally senses |
+
+`EntryExample.sense_id` is populated when the Tatoeba index supplies a sense
+number and the target sense can be resolved.
+
+## App Attachment Model
+
+Open `sumatora_core.db` as the main DB, then attach installed packs:
+
+```sql
+ATTACH DATABASE '/path/sumatora_gloss_eng.db' AS gloss_eng;
+ATTACH DATABASE '/path/sumatora_search_suffix.db' AS suffix;
+ATTACH DATABASE '/path/sumatora_names.db' AS names;
+ATTACH DATABASE '/path/sumatora_pitch.db' AS pitch;
+ATTACH DATABASE '/path/sumatora_kanji.db' AS kanji;
+ATTACH DATABASE '/path/sumatora_examples_eng.db' AS examples_eng;
+```
+
+Clients should carry query result metadata:
+
+```text
+entry_id
+form_id
+match_kind
+matched_text
+original_query
+dictionary_form
+deinflection_label
+rank
+```
+
+The renderer then loads core display rows by `entry_id`, filters senses by
+matched `form_id`, and fetches optional data from attached packs.
+
+## Build Commands
+
+Build monolithic v2 DB:
 
 ```sh
-# Standard build — includes pitch accent from UniDic automatically:
-python3 generate-jmdict.py -o output/
-
-# With additional curated TSV pitch data (overlays UniDic):
-python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv
-
-# With Tatoeba example sentences:
-python3 generate-jmdict.py -o output/ --gitoeba ~/Code/gitoeba/
-
-# Full build with everything:
-python3 generate-jmdict.py -o output/ --pitch-tsv pitch_data.tsv --gitoeba ~/Code/gitoeba/
+python3 build-sumatora-db.py -o output/
 ```
 
-`generate-jmdict.py` runs all nine steps in dependency order:
-
-| Step | Script | Always runs |
-|------|--------|-------------|
-| 1 | `kanjidic2-to-git.py` | yes |
-| 2 | `jmnedict-to-git.py` | yes |
-| 3 | `jmdict-to-git.py` | yes |
-| 4 | `unidic-to-git.py` | yes — downloads UniDic from NINJAL, cached as a MeCab dicdir in `~/.cache/unidic/` |
-| 5 | `pitch-to-git.py` | only when `*.tsv` files are found in `--pitch-dir` or via `--pitch-tsv` |
-| 6 | `gitjidic2-to-sqlite.py` | yes |
-| 7 | `gitmdict-to-sqlite.py` | yes |
-| 8 | `gitch-to-sqlite.py` | yes |
-| 9 | `gitoeba-to-sqlite.py` | only when `--gitoeba` dir exists |
-
-Intermediate JSON repos are written to `~/Code/gitjidic2/`, `~/Code/gitmdict/`,
-`~/Code/gitnedict/`, and `~/Code/gitch/` by default (override with
-`--gitjidic2`, `--gitmdict`, `--gitnedict`, `--gitch`).  All network downloads
-are cached in `~/.cache/` (override with `--cache`).
-
-### Step by step
+Build monolithic DB and English install packs:
 
 ```sh
-# Stage 1 — JSON repos (git-friendly intermediate data)
-python3 kanjidic2-to-git.py -o ~/Code/gitjidic2/ [--cache ~/.cache/kanjidic2]
-python3 jmnedict-to-git.py  -o ~/Code/gitnedict/  [--cache ~/.cache/jmnedict]
-python3 jmdict-to-git.py    -o ~/Code/gitmdict/  --kanjidic2 ~/Code/gitjidic2/ [--cache ~/.cache/jmdict]
-python3 unidic-to-git.py    -o ~/Code/gitch/     [--cache ~/.cache/unidic]
-python3 pitch-to-git.py     -i pitch_data.tsv    -o ~/Code/gitch/   # optional overlay
-
-# Stage 2 — SQLite databases
-python3 gitjidic2-to-sqlite.py -i ~/Code/gitjidic2/ -o output/
-python3 gitmdict-to-sqlite.py  -i ~/Code/gitmdict/  --nedict ~/Code/gitnedict/ -o output/
-python3 gitch-to-sqlite.py     -i ~/Code/gitch/      -o output/
-python3 gitoeba-to-sqlite.py   -i ~/Code/gitoeba/    -j output/jmdict.db -u ~/.cache/unidic -o output/  # optional
+python3 build-sumatora-db.py -o output/ --split-packs
 ```
 
-`unidic-to-git.py` downloads `unidic-cwj-YYYYMM.zip` from
-`https://clrd.ninjal.ac.jp/unidic/download.html` (auto-discovers the latest
-release), extracts the five files a working MeCab dictionary needs — `sys.dic`,
-`matrix.bin`, `char.bin`, `unk.dic`, `dicrc` (~1.3 GB cached, `matrix.bin`
-alone accounts for most of it) — and discards the zip. Subsequent runs use a
-conditional GET and only re-download when NINJAL publishes a new version.
-The cache dir doubles as the `-u` dicdir for `gitoeba-to-sqlite.py`, which
-tokenizes each Tatoeba sentence with MeCab (via `fugashi`) to generate
-furigana covering every kanji in the sentence, not just the ones covered by
-Tatoeba's own manually-curated B-line annotations.
+Build selected language packs:
 
-`pitch-to-git.py` does not download anything — supply your own TSV data.  When
-run after `unidic-to-git.py`, its entries overwrite UniDic data for the same
-words; UniDic entries for all other words are preserved.
+```sh
+python3 build-sumatora-db.py -o output/ --split-packs --pack-lang eng --pack-lang ger
+```
 
-Curated entry corrections can be placed in `patches/entries/{shard}/{seq}.json`
-as RFC 7396 JSON Merge Patches; they are applied automatically during
-`jmdict-to-git.py`.
+Build every language pack present in the monolithic DB:
 
-Output files: `output/jmdict.db`, `output/eng.db`, `output/ger.db`, …,
-`output/kanjidic2.db`, `output/pitch.db`, `output/examples_eng.db`, …
+```sh
+python3 build-sumatora-db.py -o output/ --split-packs --all-pack-languages
+```
+
+Split an existing monolithic DB:
+
+```sh
+python3 split-sumatora-packs.py -i output/sumatora.db -o output/packs --lang eng
+```
+
+## Notes
+
+- Cross-database foreign keys are not available in SQLite. Pack tables preserve
+  the same ids (`entry_id`, `form_id`, `sense_id`) and the app joins across
+  attached databases using those ids.
+- The monolithic DB remains useful for validation, but it is not the recommended
+  phone distribution artifact.
+- Pack splitting keeps the v2 structured display model while avoiding a large
+  mandatory install.

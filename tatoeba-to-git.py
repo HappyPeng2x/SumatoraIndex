@@ -65,14 +65,14 @@ MIN_FILE_BYTES = 200
 
 # B-line token regex — same semantics as sumatora-index-tatoeba.py.
 # Each space-separated token in jpn_indices text has the form:
-#   writing(reading)[index]{expression}~
+#   writing(reading)[sense-number]{expression}~
+#   writing(#entry-id)[sense-number]{expression}~
 # Only tokens with a trailing ~ are verified JMdict matches.
-# The [index] field is a sequential counter, NOT a JMdict seq number.
 # expression is the surface form in the sentence (differs from writing for inflections).
 TOKEN_RE = re.compile(
     r'(?P<writing>[^\(\)\[\]\{\}\s]+)'
     r'(\((?P<reading>[^\(\)\[\]\{\}\s]*)\))?'
-    r'(\[[^\(\)\[\]\{\}\s]*\])?'
+    r'(\[(?P<senseNumber>[^\(\)\[\]\{\}\s]*)\])?'
     r'(\{(?P<expression>[^\(\)\[\]\{\}\s]*)\})?'
     r'(?P<verified>~)?'
     r'\s?'
@@ -170,16 +170,27 @@ def parse_jpn_indices(cache_dir):
                 if m['verified'] == '~' and m['writing']:
                     writing = m['writing']
                     reading = m['reading'] or None
+                    entry_id = None
+                    if reading and reading.startswith('#') and reading[1:].isdigit():
+                        entry_id = int(reading[1:])
+                        reading = None
+                    sense_number = None
+                    if m['senseNumber'] and m['senseNumber'].isdigit():
+                        sense_number = int(m['senseNumber'])
                     expression = m['expression'] or None
                     # expression equal to writing carries no extra info
                     if expression == writing:
                         expression = None
-                    key = (writing, reading, expression)
+                    key = (writing, reading, entry_id, sense_number, expression)
                     if key not in seen:
                         seen.add(key)
                         tok = {'writing': writing}
                         if reading:
                             tok['reading'] = reading
+                        if entry_id is not None:
+                            tok['entryId'] = entry_id
+                        if sense_number is not None:
+                            tok['senseNumber'] = sense_number
                         if expression:
                             tok['expression'] = expression
                         tokens.append(tok)
@@ -189,12 +200,14 @@ def parse_jpn_indices(cache_dir):
                 else:
                     # merge tokens from multiple B-lines for the same sentence
                     existing = {
-                        (t['writing'], t.get('reading'), t.get('expression'))
+                        (t['writing'], t.get('reading'), t.get('entryId'),
+                         t.get('senseNumber'), t.get('expression'))
                         for t in result[sentence_id]
                     }
                     result[sentence_id].extend(
                         t for t in tokens
-                        if (t['writing'], t.get('reading'), t.get('expression')) not in existing
+                        if (t['writing'], t.get('reading'), t.get('entryId'),
+                            t.get('senseNumber'), t.get('expression')) not in existing
                     )
     return result
 

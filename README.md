@@ -6,6 +6,55 @@ As of v0.5.0 the pipeline is split into two steps with a git-friendly JSON inter
 
 ## Pipeline
 
+### Schema v2 pipeline
+
+`schema-v2.md` is implemented as a new normalized single-database build path for
+SumatoraDictionary and future clients:
+
+```
+python3 build-sumatora-db.py -o <output directory>
+```
+
+The XML/source-data to JSON to SQLite architecture is preserved. Stage 1 writes
+git-friendly JSON repositories (`gitjidic2`, `gitmdict`, `gitnedict`, `gitch`,
+and optionally `gitoeba`), so source changes can still be reviewed in git over
+time. Stage 2 compiles those JSON repositories into:
+
+```
+<output directory>/sumatora.db
+```
+
+For phone distribution, generate installable pack databases as well:
+
+```
+python3 build-sumatora-db.py -o <output directory> --skip-stage1 --split-packs
+```
+
+The default pack split writes English install packs under
+`<output directory>/packs`. Use repeated `--pack-lang <code>` for selected
+languages, or `--all-pack-languages` for every language present in the
+monolithic DB.
+
+Use existing JSON repositories without downloading/parsing sources again:
+
+```
+python3 build-sumatora-db.py -o <output directory> --skip-stage1
+```
+
+The v2 database uses explicit tables for entries, forms, furigana segments,
+senses, tags, search terms, kanji details, pitch accent, and examples. It is not
+backward compatible with the legacy Android database files.
+
+Optional inputs:
+
+- `--pitch-tsv <file>` or `--pitch-dir <dir>` overlays curated pitch data into
+  the `gitch` JSON repo before SQLite generation.
+- `--gitoeba <dir>` imports Tatoeba examples when a prepared `gitoeba` JSON repo
+  is available.
+
+The legacy v1 pipeline below still exists for the current Android database
+format.
+
 ### Step 1 — XML → JSON git repository
 
 ```
