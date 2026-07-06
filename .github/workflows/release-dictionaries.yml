@@ -2,7 +2,7 @@ name: Release dictionaries
 
 # Rebuilds every installable pack from upstream JMdict/JMnedict/KANJIDIC2/
 # Tatoeba/UniDic, publishes them as a GitHub Release on this repo, and
-# updates dictionaries.xml on `main` to point at the new release. See
+# updates dictionaries.xml on `master` to point at the new release. See
 # release-pipeline.md for the full design and why this lives here (rather
 # than in a client app repo like SumatoraDictionary): SumatoraIndex is the
 # single upstream producer every client (Android, desktop, PWA) should fetch
@@ -116,7 +116,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$TAG" release/*.db.gz \
             --title "Dictionaries v${{ steps.version.outputs.next_version }} (${{ steps.version.outputs.date }})" \
-            --notes "Automated dictionary pack rebuild. See dictionaries.xml on main for the current manifest."
+            --notes "Automated dictionary pack rebuild. See dictionaries.xml on master for the current manifest."
 
       - name: Commit updated manifest
         run: |
@@ -127,5 +127,5 @@ jobs:
             echo "dictionaries.xml unchanged, nothing to commit"
           else
             git commit -m "Release dictionaries v${{ steps.version.outputs.next_version }} (${{ steps.version.outputs.date }})"
-            git push origin HEAD:main
+            git push origin HEAD:master
           fi

@@ -76,9 +76,9 @@ rationale):
 3. Publishes a GitHub Release tagged `dictionaries-v{N}` with the gzipped
    packs as assets.
 4. Regenerates `dictionaries.xml` pointing at those assets and commits it to
-   `main`.
+   `master`.
 
-Because `dictionaries_url` is a stable `raw.githubusercontent.com/.../main/`
+Because `dictionaries_url` is a stable `raw.githubusercontent.com/.../master/`
 URL (not tied to a release tag), updating step 4 is what actually makes a
 new release visible to the app — cutting the GitHub Release alone isn't
 enough.
