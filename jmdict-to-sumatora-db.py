@@ -67,8 +67,8 @@ from collections import defaultdict
 import sumatora_schema
 from sumatora_common import TagCache, hira_to_kata, is_priority_code, iter_json_files, parse_bracket_furigana
 
-# Kanji-element info tags that mark a form as irregular or rarely used.
-_IRREGULAR_TAGS = frozenset({'iK', 'rK', 'io'})
+# Kanji/reading-element info tags that mark a form as irregular or rarely used.
+_IRREGULAR_TAGS = frozenset({'iK', 'rK', 'io', 'ik', 'ok', 'rk'})
 
 # Search-only tags: valid search keys, but never shown as a headline/forms-table
 # entry (mirrors Jitendex's sK/sk handling).
@@ -230,17 +230,30 @@ def _pass1_forms(c, entries_dir, src, entities, tags):
         # forms) so is_primary can be chosen by score across the whole entry
         # instead of by whichever form JMdict happens to list first.
         pending = []
+        kana_by_text = {kn['text']: kn for kn in kana_list}
         for k in kanji_list:
             readings = _applicable_readings(k['text'], kana_list) or [None]
             is_search_only = int(_SEARCH_ONLY_KANJI_TAG in k.get('tags', []))
             furigana_by_reading = k.get('furiganaByReading') or {}
             for reading in readings:
+                # Score this specific (kanji, reading) pair, not the kanji element
+                # alone: ke_pri/ke_inf and re_pri/re_inf are independent per JMdict,
+                # so a common kanji paired with a rare reading (or vice versa) is
+                # not itself a common pairing, and an irregular tag on either side
+                # should demote the pair the same way.
+                kn = kana_by_text.get(reading)
+                if kn is None:
+                    pair_common = k['common']
+                    pair_tags = set(k.get('tags', []))
+                else:
+                    pair_common = k['common'] and kn['common']
+                    pair_tags = set(k.get('tags', [])) | set(kn.get('tags', []))
                 pending.append({
                     'form_type': 'writing',
                     'text': k['text'],
                     'reading': reading,
-                    'is_common': int(k['common']),
-                    'score': _form_score(k['common'], k.get('tags', [])),
+                    'is_common': int(pair_common),
+                    'score': _form_score(pair_common, pair_tags),
                     'is_search_only': is_search_only,
                     'tags': k.get('tags', []),
                     'furigana': furigana_by_reading.get(reading) if reading else None,
@@ -367,9 +380,15 @@ def _pass2_senses(c, entries_dir, translations_dir, entities, tags,
                     ):
                         restricted.add(row[0])
                 for text in stagr:
+                    # stagr restricts by reading regardless of kanji form, so this
+                    # must also catch 'writing' rows paired with that reading (e.g.
+                    # 発条/ばね) — matching only kana-only 'reading' rows would make
+                    # a client filtering by a matched writing form_id miss the
+                    # restriction entirely.
                     for row in c.execute(
-                        "SELECT form_id FROM EntryForm WHERE entry_id = ? AND form_type = 'reading' AND text = ?",
-                        (entry_id, text),
+                        "SELECT form_id FROM EntryForm WHERE entry_id = ? AND "
+                        "((form_type = 'reading' AND text = ?) OR (form_type = 'writing' AND reading = ?))",
+                        (entry_id, text, text),
                     ):
                         restricted.add(row[0])
                 for form_id in restricted:
