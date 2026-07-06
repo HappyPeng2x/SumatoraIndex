@@ -27,6 +27,7 @@ _DROP_CORE = (
     'KanjiMeaning', 'KanjiReading', 'KanjiEntry',
     'EntryExample', 'ExampleSegment', 'Example',
     'SearchSuffix',
+    'NameTranslation',
 )
 
 _DROP_GLOSS = (

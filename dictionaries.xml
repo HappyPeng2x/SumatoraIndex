@@ -1,0 +1,6 @@
+<repository version="8" date="20260705">
+    <dictionary uri="https://github.com/HappyPeng2x/SumatoraDictionary/releases/download/dictionaries-v8/sumatora_search_suffix.db.gz"
+        type="suffix" description="Substring search" lang=""/>
+    <dictionary uri="https://github.com/HappyPeng2x/SumatoraDictionary/releases/download/dictionaries-v8/sumatora_names.db.gz"
+        type="names" description="Proper names (JMnedict)" lang=""/>
+</repository>

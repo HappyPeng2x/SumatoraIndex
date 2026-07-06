@@ -1,0 +1,131 @@
+name: Release dictionaries
+
+# Rebuilds every installable pack from upstream JMdict/JMnedict/KANJIDIC2/
+# Tatoeba/UniDic, publishes them as a GitHub Release on this repo, and
+# updates dictionaries.xml on `main` to point at the new release. See
+# release-pipeline.md for the full design and why this lives here (rather
+# than in a client app repo like SumatoraDictionary): SumatoraIndex is the
+# single upstream producer every client (Android, desktop, PWA) should fetch
+# from, so there is exactly one canonical release/manifest location.
+#
+# Runs on a monthly schedule (JMdict/JMnedict/Tatoeba don't need more
+# frequent republishing) and can always be triggered manually.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pack_langs:
+        description: >-
+          Comma-separated gloss/example language codes to build packs for.
+          Leave as-is for the standard curated set; use "all" to build every
+          language SumatoraIndex has translation data for (much larger, many
+          low-traffic languages).
+        required: false
+        default: eng,ger,rus,spa,dut,hun,swe,fre,slv
+  schedule:
+    - cron: '0 3 1 * *'  # 03:00 UTC on the 1st of every month
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-dictionaries
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out SumatoraIndex
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install lxml fugashi
+
+      # Every *-to-git.py step re-downloads its upstream source through
+      # ensure_cached()'s conditional-GET cache, so restoring a previous
+      # run's cache just turns unchanged sources into fast 304 responses
+      # instead of full re-downloads - it never causes stale data, since
+      # ensure_cached() always re-validates against the server.
+      - name: Cache download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache
+          key: sumatora-download-cache-${{ github.run_id }}
+          restore-keys: sumatora-download-cache-
+
+      - name: Compute next version and date
+        id: version
+        run: |
+          if [ -f dictionaries.xml ]; then
+            CURRENT=$(grep -oP '(?<=version=")[0-9]+' dictionaries.xml | head -1)
+          else
+            CURRENT=0
+          fi
+          NEXT=$((CURRENT + 1))
+          DATE=$(date -u +%Y%m%d)
+          echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "tag=dictionaries-v$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Building version $NEXT ($DATE), tag ${{ github.event.repository.name }}@dictionaries-v$NEXT"
+
+      - name: Build pack languages argument
+        id: langs
+        run: |
+          INPUT="${{ github.event.inputs.pack_langs || 'eng,ger,rus,spa,dut,hun,swe,fre,slv' }}"
+          if [ "$INPUT" = "all" ]; then
+            echo "flag=--all-pack-languages" >> "$GITHUB_OUTPUT"
+          else
+            FLAG=""
+            IFS=',' read -ra LANGS <<< "$INPUT"
+            for lang in "${LANGS[@]}"; do
+              FLAG="$FLAG --pack-lang $lang"
+            done
+            echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build monolithic DB and packs
+        run: |
+          python3 build-sumatora-db.py -o output/ --split-packs \
+            ${{ steps.langs.outputs.flag }}
+
+      - name: Gzip, checksum, and render dictionaries.xml
+        run: |
+          python3 release-dictionaries.py \
+            --packs-dir output/packs \
+            --release-dir release/ \
+            --version ${{ steps.version.outputs.next_version }} \
+            --date ${{ steps.version.outputs.date }} \
+            --download-base-url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}" \
+            -o dictionaries.xml
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          # Idempotent: a retry of a failed run targeting the same version
+          # replaces the partial release instead of erroring on "already exists".
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" release/*.db.gz \
+            --title "Dictionaries v${{ steps.version.outputs.next_version }} (${{ steps.version.outputs.date }})" \
+            --notes "Automated dictionary pack rebuild. See dictionaries.xml on main for the current manifest."
+
+      - name: Commit updated manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dictionaries.xml
+          if git diff --cached --quiet; then
+            echo "dictionaries.xml unchanged, nothing to commit"
+          else
+            git commit -m "Release dictionaries v${{ steps.version.outputs.next_version }} (${{ steps.version.outputs.date }})"
+            git push origin HEAD:main
+          fi

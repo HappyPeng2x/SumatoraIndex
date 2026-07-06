@@ -11,6 +11,7 @@ Dependency graph (→ = depends on):
     kanjidic2-to-git.py         →  gitjidic2/
     jmnedict-to-git.py          →  gitnedict/
     jmdict-to-git.py            →  gitmdict/       (uses gitjidic2/ for informed furigana)
+    tatoeba-to-git.py           →  gitoeba/        (Tatoeba sentences/translations/token index)
     unidic-to-git.py            →  gitch/          (also leaves a MeCab dicdir in the
                                                       unidic cache dir, used below)
     [pitch-to-git.py]           →  gitch/          (curated TSV; overwrites UniDic for same words)
@@ -38,7 +39,7 @@ Usage:
         [--cache      <dir>]   download cache root                (default: ~/.cache)
         [--skip-stage1]        reuse existing JSON repos instead of re-running
                                 kanjidic2-to-git.py / jmnedict-to-git.py / jmdict-to-git.py /
-                                unidic-to-git.py / pitch-to-git.py
+                                tatoeba-to-git.py / unidic-to-git.py / pitch-to-git.py
         [--split-packs]        also write installable pack DBs under <output>/packs
         [--pack-lang <code>]   repeatable pack language (default: eng)
         [--all-pack-languages] split every language present in the monolithic DB
@@ -58,6 +59,9 @@ import glob
 import os
 import subprocess
 import sys
+import time
+
+import sumatora_schema
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -86,6 +90,16 @@ def run(*args):
     cmd = [sys.executable] + [str(a) for a in args]
     print('==> ' + ' '.join(cmd), flush=True)
     subprocess.run(cmd, check=True)
+
+
+def _git_describe():
+    try:
+        return subprocess.run(
+            ['git', 'describe', '--tags', '--always', '--dirty'],
+            cwd=SCRIPT_DIR, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return 'unknown'
 
 
 def main(argv):
@@ -152,6 +166,7 @@ def main(argv):
     kanjidic2_cache = os.path.join(cache_dir, 'kanjidic2')
     jmnedict_cache  = os.path.join(cache_dir, 'jmnedict')
     jmdict_cache    = os.path.join(cache_dir, 'jmdict')
+    tatoeba_cache   = os.path.join(cache_dir, 'tatoeba')
     unidic_cache    = os.path.join(cache_dir, 'unidic')
 
     # ------------------------------------------------------------------
@@ -179,14 +194,19 @@ def main(argv):
             '--kanjidic2', gitjidic2_dir,
             '--cache', jmdict_cache)
 
-        print('--- Step 4: unidic-to-git ---', flush=True)
+        print('--- Step 4: tatoeba-to-git ---', flush=True)
+        run(script('tatoeba-to-git.py'),
+            '-o', gitoeba_dir,
+            '--cache', tatoeba_cache)
+
+        print('--- Step 5: unidic-to-git ---', flush=True)
         run(script('unidic-to-git.py'), '-o', gitch_dir, '--cache', unidic_cache)
 
         if not pitch_tsvs and os.path.isdir(pitch_dir):
             pitch_tsvs = sorted(glob.glob(os.path.join(pitch_dir, '*.tsv')))
 
         if pitch_tsvs:
-            print('--- Step 5: pitch-to-git (overwrites UniDic for curated words) ---',
+            print('--- Step 6: pitch-to-git (overwrites UniDic for curated words) ---',
                   flush=True)
             pitch_args = [script('pitch-to-git.py')]
             for tsv in pitch_tsvs:
@@ -194,7 +214,7 @@ def main(argv):
             pitch_args += ['-o', gitch_dir]
             run(*pitch_args)
         else:
-            print(f'--- Step 5: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
+            print(f'--- Step 6: pitch-to-git skipped (no *.tsv in {pitch_dir}) ---', flush=True)
 
     # ------------------------------------------------------------------
     # Stage 2 — compile JSON repos into one normalized sumatora.db
@@ -205,38 +225,48 @@ def main(argv):
     if os.path.exists(sumatora_db):
         os.unlink(sumatora_db)
 
-    print('--- Step 6: kanjidic2-to-sumatora-db ---', flush=True)
+    print('--- Step 7: kanjidic2-to-sumatora-db ---', flush=True)
     run(script('kanjidic2-to-sumatora-db.py'),
         '-i', gitjidic2_dir,
         '-d', sumatora_db)
 
-    print('--- Step 7: jmnedict-to-sumatora-db ---', flush=True)
+    print('--- Step 8: jmnedict-to-sumatora-db ---', flush=True)
     run(script('jmnedict-to-sumatora-db.py'),
         '-i', gitnedict_dir,
         '-d', sumatora_db)
 
-    print('--- Step 8: jmdict-to-sumatora-db ---', flush=True)
+    print('--- Step 9: jmdict-to-sumatora-db ---', flush=True)
     run(script('jmdict-to-sumatora-db.py'),
         '-i', gitmdict_dir,
         '-d', sumatora_db)
 
-    print('--- Step 9: pitch-to-sumatora-db ---', flush=True)
+    print('--- Step 10: pitch-to-sumatora-db ---', flush=True)
     run(script('pitch-to-sumatora-db.py'),
         '-i', gitch_dir,
         '-d', sumatora_db)
 
     if os.path.isdir(gitoeba_dir):
-        print('--- Step 10: gitoeba-to-sumatora-db ---', flush=True)
+        print('--- Step 11: gitoeba-to-sumatora-db ---', flush=True)
         run(script('gitoeba-to-sumatora-db.py'),
             '-i', gitoeba_dir,
             '-u', unidic_cache,
             '-d', sumatora_db)
     else:
-        print(f'--- Step 10: gitoeba-to-sumatora-db skipped ({gitoeba_dir} not found) ---',
+        print(f'--- Step 11: gitoeba-to-sumatora-db skipped ({gitoeba_dir} not found) ---',
               flush=True)
 
+    print('--- Step 11.5: build metadata ---', flush=True)
+    conn = sumatora_schema.open_or_init_db(sumatora_db)
+    sumatora_schema.set_build_metadata(
+        conn,
+        schema_version=str(sumatora_schema.SCHEMA_VERSION),
+        build_timestamp=str(int(time.time())),
+        sumatora_index_version=_git_describe(),
+    )
+    conn.close()
+
     if split_packs:
-        print('--- Step 11: split-sumatora-packs ---', flush=True)
+        print('--- Step 12: split-sumatora-packs ---', flush=True)
         run(script('split-sumatora-packs.py'),
             '-i', sumatora_db,
             '-o', os.path.join(output_dir, 'packs'),
