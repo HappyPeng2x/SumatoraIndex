@@ -111,9 +111,18 @@ def _form_score(common, tags):
 
 
 def _applicable_readings(kanji_text, kana_list):
-    """Return every kana reading that applies to kanji_text."""
+    """Return every kana reading that applies to kanji_text.
+
+    A nokanji reading (JMdict re_nokanji) is excluded even when its
+    appliesToKanji is unrestricted ('*'): nokanji means the reading is
+    conventionally written in kana alone and must never bridge to a kanji
+    form — it should surface only as its own kana-only EntryForm row, not as
+    a (kanji, reading) writing-form pair.
+    """
     readings = []
     for k in kana_list:
+        if k.get('nokanji'):
+            continue
         applies = k.get('appliesToKanji', ['*'])
         if '*' in applies or kanji_text in applies:
             readings.append(k['text'])
