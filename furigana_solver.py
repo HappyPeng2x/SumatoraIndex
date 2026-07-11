@@ -224,7 +224,14 @@ def _solve_ignorant(kanji_form, reading_hira, knowledge=None):
             if next_kana_norm is None:
                 kanji_reading = remaining
             else:
-                anchor = remaining.find(next_kana_norm)
+                # Search from index 1, not 0: the kanji run must consume at
+                # least one character of reading, so a match at position 0
+                # (the kanji's own reading happens to start with the same
+                # kana the following segment starts with, e.g. 砕く's くだ
+                # followed by く) can never be the right anchor - matching
+                # there anyway used to yield an empty, always-invalid
+                # kanji_reading and made compute_furigana fail outright.
+                anchor = remaining.find(next_kana_norm, 1)
                 if anchor < 0:
                     return None
                 kanji_reading = remaining[:anchor]
@@ -246,7 +253,8 @@ def _solve_ignorant(kanji_form, reading_hira, knowledge=None):
 
 
 def compute_furigana(kanji_form, reading, knowledge=None):
-    """Return bracket-notation furigana string, or None for pure-kana forms.
+    """Return bracket-notation furigana string, or None for pure-kana forms
+    (or when no reliable furigana can be produced at all - see below).
 
     Example: compute_furigana("食べ物", "たべもの") → "食[た]べ物[もの]"
     Without knowledge, consecutive kanji blocks fall back to a single bracket:
@@ -258,7 +266,21 @@ def compute_furigana(kanji_form, reading, knowledge=None):
     reading_hira = _kata_to_hira(reading)
     parts = _solve_ignorant(kanji_form, reading_hira, knowledge)
     if parts is None:
-        return f'{kanji_form}[{reading_hira}]'
+        # A whole-word bracket fallback is only structurally valid when
+        # kanji_form is pure kanji: parse_bracket_furigana (sumatora_common.py)
+        # requires a bracket to immediately follow the kanji run it applies
+        # to, and f'{kanji_form}[{reading_hira}]' places it at the very end
+        # of the *entire* string - correct when there's no trailing/embedded
+        # kana to place it after, but a structural violation otherwise (the
+        # kana and the bracket itself leak through as literal characters).
+        # _solve_ignorant already failing means there's no literal
+        # correspondence between reading_hira and kanji_form's kana either
+        # (a contracted/colloquial alternate reading, e.g. 駄々をこねる's
+        # 「だだこねる」 eliding を) - there's no reliable partial split to
+        # fall back to, so no furigana is the honest answer, not a broken one.
+        if all(_is_kanji(c) for c in kanji_form):
+            return f'{kanji_form}[{reading_hira}]'
+        return None
     return ''.join(
         base if ruby is None else f'{base}[{ruby}]'
         for base, ruby in parts
