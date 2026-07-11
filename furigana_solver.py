@@ -20,7 +20,13 @@ def _is_kanji(c):
         0x4E00 <= cp <= 0x9FFF or  # CJK Unified Ideographs
         0x3400 <= cp <= 0x4DBF or  # CJK Extension A
         0xF900 <= cp <= 0xFAFF or  # CJK Compatibility Ideographs
-        0x20000 <= cp <= 0x2A6DF   # CJK Extension B
+        0x20000 <= cp <= 0x2A6DF or  # CJK Extension B
+        cp == 0x3005                # Kanji iteration mark (々) - not a real
+                                     # character with its own kanjidic entry,
+                                     # but it stands in for one (時々, 我々,
+                                     # 苦々しい...) and must join the kanji run
+                                     # it repeats, not the following kana run -
+                                     # see _split_kanji_run's 々 special case.
     )
 
 
@@ -148,7 +154,17 @@ def _split_kanji_run(run, reading, knowledge):
             if pos == len(reading):
                 found.append(tuple(current))
             return len(found) < 2          # stop once ambiguous
-        for stem in knowledge.get(run[char_idx], ()):
+        # 々 has no kanjidic entry of its own - it borrows whatever reading
+        # was just assigned to the character it repeats, either as-is (我々
+        # -> われ+われ) or rendaku-voiced, which is the more common case for
+        # this exact repetition pattern (時々 -> とき+どき, 人々 -> ひと+びと).
+        if run[char_idx] == '々' and char_idx > 0:
+            prev = current[char_idx - 1]
+            rend = _rendaku(prev)
+            candidates = (prev, rend) if rend else (prev,)
+        else:
+            candidates = knowledge.get(run[char_idx], ())
+        for stem in candidates:
             if reading.startswith(stem, pos):
                 current.append(stem)
                 if not search(char_idx + 1, pos + len(stem), current):

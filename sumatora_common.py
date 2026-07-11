@@ -31,7 +31,13 @@ _KANJI_RANGES = ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF), (0x20000,
 
 def _is_kanji(c):
     cp = ord(c)
-    return any(lo <= cp <= hi for lo, hi in _KANJI_RANGES)
+    # 0x3005 (々, the kanji iteration mark) is included alongside the real
+    # kanji ranges: furigana_solver.py's compute_furigana() now treats it as
+    # part of the kanji run it repeats (時々, 苦々しい...), so a bracket can
+    # immediately follow it just like after any other kanji run - this must
+    # agree with that classification or parse_bracket_furigana below
+    # mis-splits the bracket that follows 々.
+    return cp == 0x3005 or any(lo <= cp <= hi for lo, hi in _KANJI_RANGES)
 
 
 def parse_bracket_furigana(text):
