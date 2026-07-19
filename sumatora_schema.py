@@ -286,16 +286,22 @@ CREATE TABLE DeinflectionRule (
 
 CREATE INDEX EntryType ON Entry(entry_type);
 CREATE INDEX EntrySourceKey ON Entry(source_id, source_key);
+-- source_id has just one distinct value among word entries (all from jmdict), so the composite
+-- index above can't seek on source_key alone - the app's bookmark join looks up Entry by
+-- source_key only (it doesn't know source_id), so it needs its own leading-column index.
+CREATE INDEX EntrySourceKeyOnly ON Entry(source_key);
 
 CREATE INDEX EntryFormEntry ON EntryForm(entry_id, ord);
 CREATE INDEX EntryFormText ON EntryForm(text);
 CREATE INDEX EntryFormReading ON EntryForm(reading);
 
 CREATE INDEX SenseEntry ON Sense(entry_id, ord);
+CREATE INDEX SenseSenseGroup ON Sense(sense_group_id, ord);
 CREATE INDEX SenseGroupEntry ON SenseGroup(entry_id, ord);
 CREATE INDEX SenseAppliesForm ON SenseAppliesToForm(form_id, sense_id);
 
 CREATE INDEX SenseGlossLang ON SenseGloss(lang, text);
+CREATE INDEX SenseReferenceSense ON SenseReference(sense_id, reference_type, ord);
 CREATE INDEX SenseReferenceTarget ON SenseReference(target_entry_id);
 
 CREATE INDEX EntryExampleEntry ON EntryExample(entry_id, ord);
