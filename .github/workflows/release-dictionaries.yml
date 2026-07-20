@@ -35,6 +35,11 @@ concurrency:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    # `if:` conditions can't reference `secrets` directly (GitHub Actions
+    # rejects it at parse time: "Unrecognized named-value: 'secrets'") --
+    # route it through a job-level env var instead, which `if:` can read.
+    env:
+      DICT_REPOS_PAT_SET: ${{ secrets.DICT_REPOS_PAT != '' }}
     steps:
       - name: Check out SumatoraIndex
         uses: actions/checkout@v4
@@ -105,7 +110,7 @@ jobs:
       # header. Skips (not fails) if the secret isn't configured yet, and
       # won't block the actual dictionary release if a sync fails.
       - name: Sync stage-1 JSON repos
-        if: ${{ secrets.DICT_REPOS_PAT != '' }}
+        if: ${{ env.DICT_REPOS_PAT_SET == 'true' }}
         continue-on-error: true
         env:
           GH_SYNC_TOKEN: ${{ secrets.DICT_REPOS_PAT }}
@@ -127,7 +132,7 @@ jobs:
       # two repos (same secret as the stage-1 sync above); skips gracefully
       # if unset.
       - name: Build gitender + gitenderml
-        if: ${{ secrets.DICT_REPOS_PAT != '' }}
+        if: ${{ env.DICT_REPOS_PAT_SET == 'true' }}
         continue-on-error: true
         run: |
           python3 sumatora-to-git.py -d output/sumatora.db -o ~/Code/gitender
@@ -136,13 +141,14 @@ jobs:
             --lang rus --lang slv --lang spa --lang swe
 
       - name: Sync gitender + gitenderml
-        if: ${{ secrets.DICT_REPOS_PAT != '' }}
+        if: ${{ env.DICT_REPOS_PAT_SET == 'true' }}
         continue-on-error: true
         env:
           GH_SYNC_TOKEN: ${{ secrets.DICT_REPOS_PAT }}
         run: |
           ./sync-stage1-repo.sh ~/Code/gitender   HappyPeng2x/gitender   entries translations
-          ./sync-stage1-repo.sh ~/Code/gitenderml HappyPeng2x/gitenderml eng fre common.css jitendex.css
+          ./sync-stage1-repo.sh ~/Code/gitenderml HappyPeng2x/gitenderml \
+            dut eng fre ger hun rus slv spa swe common.css jitendex.css
 
       - name: Gzip, checksum, and render dictionaries.xml
         run: |
