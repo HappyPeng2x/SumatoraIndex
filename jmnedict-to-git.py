@@ -9,8 +9,7 @@ Each entry JSON has the form:
 
     {
       "seq": 5000000,
-      "kanji": [{"text": "東京", "common": true, "tags": ["news1"],
-                 "furiganaByReading": {"とうきょう": "東[とう]京[きょう]"}}],
+      "kanji": [{"text": "東京", "common": true, "tags": ["news1"]}],
       "kana":  [{"text": "とうきょう", "appliesToKanji": ["*"]}],
       "types": ["place"],
       "translations": ["Tokyo"]
@@ -19,11 +18,10 @@ Each entry JSON has the form:
 `types` is the deduplicated list of JMnedict name_type entity codes across
 all <trans> elements.  `translations` is the list of <trans_det> strings.
 
-`furiganaByReading` uses the same kanjidic2-informed solver as
-jmdict-to-git.py (shared via furigana_solver.py), keyed by every reading that
-applies to that kanji form — a name can have more than one valid reading just
-like a JMdict word. It is only present when --kanjidic2 is given; without it,
-jmnedict-to-sumatora-db.py falls back to an unannotated whole-word span.
+Furigana is not computed here — it is generated at DB-build time by
+jmnedict-to-sumatora-db.py (kanjidic2-informed, via furigana_solver.py),
+keyed by every reading that applies to a kanji form, since a name can have
+more than one valid reading just like a JMdict word.
 
 Downloaded files are cached; delete the cache to force a re-download.
 
@@ -47,8 +45,6 @@ import urllib.error
 import urllib.request
 
 from lxml import etree
-
-from furigana_solver import applicable_readings, build_knowledge, compute_furigana
 
 JMNEDICT_URL = 'http://ftp.edrdg.org/pub/Nihongo/JMnedict.xml.gz'
 ENTITY_RE = re.compile(r'<!ENTITY\s+([\w\-\.]+)\s+"([^"]+)"')
@@ -173,7 +169,7 @@ def extract_entities(path):
     return {m.group(1): m.group(2) for m in ENTITY_RE.finditer(header[:end + 2])}
 
 
-def parse_entry(elem, knowledge=None):
+def parse_entry(elem):
     seq = int(elem.findtext('ent_seq'))
 
     kanji = []
@@ -192,13 +188,6 @@ def parse_entry(elem, knowledge=None):
             'text': reb,
             'appliesToKanji': restr if restr else ['*'],
         })
-
-    for k in kanji:
-        readings = applicable_readings(k['text'], kana)
-        # One solved furigana string per applicable reading — a name can have
-        # more than one valid reading for the same kanji form, same as a
-        # JMdict word (see jmdict-to-git.py's parse_entry for the same logic).
-        k['furiganaByReading'] = {r: compute_furigana(k['text'], r, knowledge) for r in readings}
 
     types = []
     translations = []
@@ -229,9 +218,7 @@ def write_json(path, data):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process(output_dir, cache_dir, kanjidic2_dir=None):
-    knowledge = build_knowledge(kanjidic2_dir) if kanjidic2_dir else None
-
+def process(output_dir, cache_dir):
     jmnedict_path = ensure_cached(JMNEDICT_URL, cache_dir)
     print(f'  Using {jmnedict_path}', flush=True)
 
@@ -246,7 +233,7 @@ def process(output_dir, cache_dir, kanjidic2_dir=None):
             f, tag='entry',
             load_dtd=True, resolve_entities=False, no_network=True,
         ):
-            seq, kanji, kana, types, translations = parse_entry(elem, knowledge)
+            seq, kanji, kana, types, translations = parse_entry(elem)
             elem.clear()
             while elem.getprevious() is not None:
                 del elem.getparent()[0]
@@ -276,17 +263,15 @@ def process(output_dir, cache_dir, kanjidic2_dir=None):
 
 HELP = (
     'usage: jmnedict-to-git.py '
-    '-o <gitnedict directory> [--cache <cache directory>] '
-    '[--kanjidic2 <gitjidic2 directory>]'
+    '-o <gitnedict directory> [--cache <cache directory>]'
 )
 
 
 def main(argv):
     output_dir = ''
     cache_dir = os.path.expanduser('~/.cache/jmnedict')
-    kanjidic2_dir = None
     try:
-        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache=', 'kanjidic2='])
+        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -298,12 +283,10 @@ def main(argv):
             output_dir = arg
         elif opt == '--cache':
             cache_dir = arg
-        elif opt == '--kanjidic2':
-            kanjidic2_dir = arg
     if not output_dir:
         print(HELP)
         sys.exit(2)
-    process(output_dir, cache_dir, kanjidic2_dir)
+    process(output_dir, cache_dir)
 
 
 if __name__ == '__main__':

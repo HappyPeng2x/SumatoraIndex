@@ -7,6 +7,11 @@ writes rows into an existing (or newly created) sumatora.db, per schema-v2.md.
 Three full passes over gitmdict/entries/ are required:
 
   Pass 1 — Entry, EntryForm, FormTag, FormFuriganaSegment.
+           Furigana is computed here (not stored in gitmdict, which holds only
+           JMdict source data): pass -k/--kanjidic2 <gitjidic2 directory> for
+           the kanjidic2-informed solver, matching the same reading set
+           EntryForm rows are built from; omitted, forms fall back to the
+           ignorant (uninformed) solver in furigana_solver.py.
            Builds seq_to_entry_id plus kanji_index (text -> [(seq, entry_id,
            form_id, reading), ...]) and kana_index (text -> [(seq, entry_id,
            form_id), ...]) used by pass 2 to resolve cross-references, since a
@@ -65,6 +70,7 @@ import sys
 from collections import defaultdict
 
 import sumatora_schema
+from furigana_solver import build_knowledge, compute_furigana
 from sumatora_common import TagCache, hira_to_kata, is_priority_code, iter_json_files, parse_bracket_furigana
 
 # Kanji/reading-element info tags that mark a form as irregular or rarely used.
@@ -210,7 +216,7 @@ def _insert_search_term(c, entry_id, form_id, text, normalized, script, priority
     )
 
 
-def _pass1_forms(c, entries_dir, src, entities, tags):
+def _pass1_forms(c, entries_dir, src, entities, tags, knowledge):
     """Entry + EntryForm + FormTag + FormFuriganaSegment. Returns the indices pass 2 needs."""
     seq_to_entry_id = {}
     # text -> [(seq, entry_id, form_id, reading), ...]; reading distinguishes
@@ -243,7 +249,6 @@ def _pass1_forms(c, entries_dir, src, entities, tags):
         for k in kanji_list:
             readings = _applicable_readings(k['text'], kana_list) or [None]
             is_search_only = int(_SEARCH_ONLY_KANJI_TAG in k.get('tags', []))
-            furigana_by_reading = k.get('furiganaByReading') or {}
             for reading in readings:
                 # Score this specific (kanji, reading) pair, not the kanji element
                 # alone: ke_pri/ke_inf and re_pri/re_inf are independent per JMdict,
@@ -265,7 +270,7 @@ def _pass1_forms(c, entries_dir, src, entities, tags):
                     'score': _form_score(pair_common, pair_tags),
                     'is_search_only': is_search_only,
                     'tags': k.get('tags', []),
-                    'furigana': furigana_by_reading.get(reading) if reading else None,
+                    'furigana': compute_furigana(k['text'], reading, knowledge) if reading else None,
                 })
         for k in kana_list:
             pending.append({
@@ -532,7 +537,7 @@ def _insert_search_terms(conn, c, entries_dir, seq_to_entry_id):
             _insert_search_term(c, entry_id, form_id, text, hira_to_kata(text), 'kana', is_common)
 
 
-def process(gitmdict_dir, db_path):
+def process(gitmdict_dir, db_path, kanjidic2_dir=None):
     conn = sumatora_schema.open_or_init_db(db_path)
     c = conn.cursor()
     src = sumatora_schema.source_id(conn, 'jmdict')
@@ -543,9 +548,10 @@ def process(gitmdict_dir, db_path):
     tags = TagCache(conn)
     entries_dir = f'{gitmdict_dir}/entries'
     translations_dir = f'{gitmdict_dir}/translations'
+    knowledge = build_knowledge(kanjidic2_dir) if kanjidic2_dir else None
 
     print('Pass 1: Entry/EntryForm/FormTag/FormFuriganaSegment…', flush=True)
-    seq_to_entry_id, kanji_index, kana_index = _pass1_forms(c, entries_dir, src, entities, tags)
+    seq_to_entry_id, kanji_index, kana_index = _pass1_forms(c, entries_dir, src, entities, tags, knowledge)
     print(f'  {len(seq_to_entry_id)} entries, {len(kanji_index)} kanji forms, '
           f'{len(kana_index)} kana forms indexed', flush=True)
 
@@ -578,15 +584,17 @@ def process(gitmdict_dir, db_path):
 
 HELP = (
     'usage: jmdict-to-sumatora-db.py '
-    '-i <gitmdict directory> -d <sumatora.db path>'
+    '-i <gitmdict directory> -d <sumatora.db path> '
+    '[-k <gitjidic2 directory>]'
 )
 
 
 def main(argv):
     gitmdict_dir = ''
     db_path = ''
+    kanjidic2_dir = None
     try:
-        opts, _ = getopt.getopt(argv, 'hi:d:', ['idir=', 'db='])
+        opts, _ = getopt.getopt(argv, 'hi:d:k:', ['idir=', 'db=', 'kanjidic2='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -598,10 +606,12 @@ def main(argv):
             gitmdict_dir = arg
         elif opt in ('-d', '--db'):
             db_path = arg
+        elif opt in ('-k', '--kanjidic2'):
+            kanjidic2_dir = arg
     if not gitmdict_dir or not db_path:
         print(HELP)
         sys.exit(2)
-    process(gitmdict_dir, db_path)
+    process(gitmdict_dir, db_path, kanjidic2_dir)
 
 
 if __name__ == '__main__':

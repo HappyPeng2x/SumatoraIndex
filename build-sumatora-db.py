@@ -10,15 +10,17 @@ Dependency graph (→ = depends on):
 
     kanjidic2-to-git.py         →  gitjidic2/
     jmnedict-to-git.py          →  gitnedict/
-    jmdict-to-git.py            →  gitmdict/       (uses gitjidic2/ for informed furigana)
+    jmdict-to-git.py            →  gitmdict/
     tatoeba-to-git.py           →  gitoeba/        (Tatoeba sentences/translations/token index)
     unidic-to-git.py            →  gitch/          (also leaves a MeCab dicdir in the
                                                       unidic cache dir, used below)
     [pitch-to-git.py]           →  gitch/          (curated TSV; overwrites UniDic for same words)
 
     kanjidic2-to-sumatora-db.py →  sumatora.db (KanjiEntry/KanjiReading/KanjiMeaning)
-    jmnedict-to-sumatora-db.py  →  sumatora.db (Entry(name)/EntryForm/NameTranslation/...)
-    jmdict-to-sumatora-db.py    →  sumatora.db (Entry(word)/EntryForm/Sense/.../SearchTerm)
+    jmnedict-to-sumatora-db.py  →  sumatora.db (Entry(name)/EntryForm/NameTranslation/...;
+                                                  uses gitjidic2/ for informed furigana)
+    jmdict-to-sumatora-db.py    →  sumatora.db (Entry(word)/EntryForm/Sense/.../SearchTerm;
+                                                  uses gitjidic2/ for informed furigana)
     pitch-to-sumatora-db.py     →  sumatora.db (PitchAccent/PitchPattern/FormPitch;
                                                   needs EntryForm from jmdict step)
     [gitoeba-to-sumatora-db.py] →  sumatora.db (Example/ExampleSegment/EntryExample;
@@ -182,16 +184,14 @@ def main(argv):
             '-o', gitjidic2_dir,
             '--cache', kanjidic2_cache)
 
-        print('--- Step 2: jmnedict-to-git (informed furigana) ---', flush=True)
+        print('--- Step 2: jmnedict-to-git ---', flush=True)
         run(script('jmnedict-to-git.py'),
             '-o', gitnedict_dir,
-            '--kanjidic2', gitjidic2_dir,
             '--cache', jmnedict_cache)
 
-        print('--- Step 3: jmdict-to-git (informed furigana) ---', flush=True)
+        print('--- Step 3: jmdict-to-git ---', flush=True)
         run(script('jmdict-to-git.py'),
             '-o', gitmdict_dir,
-            '--kanjidic2', gitjidic2_dir,
             '--cache', jmdict_cache)
 
         print('--- Step 4: tatoeba-to-git ---', flush=True)
@@ -230,15 +230,17 @@ def main(argv):
         '-i', gitjidic2_dir,
         '-d', sumatora_db)
 
-    print('--- Step 8: jmnedict-to-sumatora-db ---', flush=True)
+    print('--- Step 8: jmnedict-to-sumatora-db (informed furigana) ---', flush=True)
     run(script('jmnedict-to-sumatora-db.py'),
         '-i', gitnedict_dir,
-        '-d', sumatora_db)
+        '-d', sumatora_db,
+        '-k', gitjidic2_dir)
 
-    print('--- Step 9: jmdict-to-sumatora-db ---', flush=True)
+    print('--- Step 9: jmdict-to-sumatora-db (informed furigana) ---', flush=True)
     run(script('jmdict-to-sumatora-db.py'),
         '-i', gitmdict_dir,
-        '-d', sumatora_db)
+        '-d', sumatora_db,
+        '-k', gitjidic2_dir)
 
     print('--- Step 10: pitch-to-sumatora-db ---', flush=True)
     run(script('pitch-to-sumatora-db.py'),

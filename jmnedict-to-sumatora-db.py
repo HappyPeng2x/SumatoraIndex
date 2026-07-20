@@ -11,7 +11,8 @@ for JMnedict's name-type codes (place, person, surname, ...).
     EntryForm(form_type='writing'|'reading')  — one row per valid kanji/reading
                                                  pair, same expansion jmdict uses
     FormTag           — informational kanji tags only (priority codes drive is_common)
-    FormFuriganaSegment — from jmnedict-to-git.py's furiganaByReading, when built with --kanjidic2
+    FormFuriganaSegment — computed here via furigana_solver.py, kanjidic2-informed
+                          when built with -k/--kanjidic2 <gitjidic2 directory>
     NameTranslation
     EntryTag          — category='name_type'
     Tag               — category='name_type', label from gitnedict's metadata.json entities
@@ -37,7 +38,7 @@ import json
 import sys
 
 import sumatora_schema
-from furigana_solver import applicable_readings
+from furigana_solver import applicable_readings, build_knowledge, compute_furigana
 from sumatora_common import TagCache, hira_to_kata, is_priority_code, iter_json_files, parse_bracket_furigana
 
 
@@ -52,7 +53,7 @@ def _select_primary(candidates):
     return max(range(len(candidates)), key=lambda i: candidates[i]['is_common'])
 
 
-def process(gitnedict_dir, db_path):
+def process(gitnedict_dir, db_path, kanjidic2_dir=None):
     conn = sumatora_schema.open_or_init_db(db_path)
     c = conn.cursor()
     src = sumatora_schema.source_id(conn, 'jmnedict')
@@ -61,6 +62,7 @@ def process(gitnedict_dir, db_path):
         entities = json.load(f).get('entities', {})
 
     tags = TagCache(conn)
+    knowledge = build_knowledge(kanjidic2_dir) if kanjidic2_dir else None
 
     entries_dir = f'{gitnedict_dir}/entries'
     count = 0
@@ -83,7 +85,6 @@ def process(gitnedict_dir, db_path):
         for k in entry.get('kanji', []):
             is_common = bool([t for t in k.get('tags', []) if is_priority_code(t)])
             readings = applicable_readings(k['text'], kana_list) or [None]
-            furigana_by_reading = k.get('furiganaByReading') or {}
             for reading in readings:
                 pending.append({
                     'form_type': 'writing',
@@ -91,7 +92,7 @@ def process(gitnedict_dir, db_path):
                     'reading': reading,
                     'is_common': int(is_common),
                     'tags': k.get('tags', []),
-                    'furigana': furigana_by_reading.get(reading) if reading else None,
+                    'furigana': compute_furigana(k['text'], reading, knowledge) if reading else None,
                 })
         for r in kana_list:
             pending.append({
@@ -173,15 +174,17 @@ def _insert_search_term(c, entry_id, form_id, text, script, is_common):
 
 HELP = (
     'usage: jmnedict-to-sumatora-db.py '
-    '-i <gitnedict directory> -d <sumatora.db path>'
+    '-i <gitnedict directory> -d <sumatora.db path> '
+    '[-k <gitjidic2 directory>]'
 )
 
 
 def main(argv):
     gitnedict_dir = ''
     db_path = ''
+    kanjidic2_dir = None
     try:
-        opts, _ = getopt.getopt(argv, 'hi:d:', ['idir=', 'db='])
+        opts, _ = getopt.getopt(argv, 'hi:d:k:', ['idir=', 'db=', 'kanjidic2='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -193,10 +196,12 @@ def main(argv):
             gitnedict_dir = arg
         elif opt in ('-d', '--db'):
             db_path = arg
+        elif opt in ('-k', '--kanjidic2'):
+            kanjidic2_dir = arg
     if not gitnedict_dir or not db_path:
         print(HELP)
         sys.exit(2)
-    process(gitnedict_dir, db_path)
+    process(gitnedict_dir, db_path, kanjidic2_dir)
 
 
 if __name__ == '__main__':

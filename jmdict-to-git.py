@@ -29,9 +29,6 @@ import urllib.request
 
 from lxml import etree
 
-from furigana_solver import applicable_readings as _applicable_readings
-from furigana_solver import build_knowledge, compute_furigana
-
 JMDICT_URL = 'http://ftp.edrdg.org/pub/Nihongo/JMdict.gz'
 NS_XML = '{http://www.w3.org/XML/1998/namespace}'
 ENTITY_RE = re.compile(r'<!ENTITY\s+([\w\-\.]+)\s+"([^"]+)"')
@@ -222,7 +219,7 @@ def get_texts(parent, tag):
     return [el.text for el in parent.findall(tag) if el.text]
 
 
-def parse_entry(elem, knowledge=None):
+def parse_entry(elem):
     seq = int(elem.findtext('ent_seq'))
 
     kanji = []
@@ -291,16 +288,6 @@ def parse_entry(elem, knowledge=None):
                 'stagr': get_texts(s, 'stagr'),
             })
 
-    for k in kanji:
-        readings = _applicable_readings(k['text'], kana)
-        reading = readings[0] if readings else None
-        k['furigana'] = compute_furigana(k['text'], reading, knowledge) if reading else None
-        # One solved furigana string per applicable reading, not just the first —
-        # a kanji form with more than one valid reading (e.g. 人気 -> にんき /
-        # ひとけ) needs real per-character ruby for each of them, not just the
-        # first one jmdict-to-sumatora-db.py happens to look up.
-        k['furiganaByReading'] = {r: compute_furigana(k['text'], r, knowledge) for r in readings}
-
     return seq, kanji, kana, eng_senses, lang_glosses
 
 
@@ -319,8 +306,7 @@ def write_json(path, data):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process(output_dir, cache_dir, kanjidic2_dir=None, patches_dir=None):
-    knowledge = build_knowledge(kanjidic2_dir) if kanjidic2_dir else None
+def process(output_dir, cache_dir, patches_dir=None):
     patches = load_patches(patches_dir if patches_dir is not None else _DEFAULT_PATCHES_DIR)
 
     jmdict_path = ensure_cached(JMDICT_URL, cache_dir)
@@ -337,7 +323,7 @@ def process(output_dir, cache_dir, kanjidic2_dir=None, patches_dir=None):
             f, tag='entry',
             load_dtd=True, resolve_entities=False, no_network=True,
         ):
-            seq, kanji, kana, eng_senses, lang_glosses = parse_entry(elem, knowledge)
+            seq, kanji, kana, eng_senses, lang_glosses = parse_entry(elem)
             elem.clear()
             while elem.getprevious() is not None:
                 del elem.getparent()[0]
@@ -373,17 +359,16 @@ def process(output_dir, cache_dir, kanjidic2_dir=None, patches_dir=None):
 HELP = (
     'usage: jmdict-to-git.py '
     '-o <gitmdict directory> [--cache <cache directory>] '
-    '[--kanjidic2 <gitjidic2 directory>] [--patches <patches directory>]'
+    '[--patches <patches directory>]'
 )
 
 
 def main(argv):
     output_dir = ''
     cache_dir = os.path.expanduser('~/.cache/jmdict')
-    kanjidic2_dir = None
     patches_dir = None
     try:
-        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache=', 'kanjidic2=', 'patches='])
+        opts, _ = getopt.getopt(argv, 'ho:', ['odir=', 'cache=', 'patches='])
     except getopt.GetoptError:
         print(HELP)
         sys.exit(2)
@@ -395,14 +380,12 @@ def main(argv):
             output_dir = arg
         elif opt == '--cache':
             cache_dir = arg
-        elif opt == '--kanjidic2':
-            kanjidic2_dir = arg
         elif opt == '--patches':
             patches_dir = arg
     if not output_dir:
         print(HELP)
         sys.exit(2)
-    process(output_dir, cache_dir, kanjidic2_dir, patches_dir)
+    process(output_dir, cache_dir, patches_dir)
 
 
 if __name__ == '__main__':

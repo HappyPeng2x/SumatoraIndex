@@ -87,7 +87,9 @@ A substring search for `term` is expressed as `*Parts MATCH term*`.
 
 ## 3 — Furigana: ignorant solver (anchor-based)
 
-**File:** `jmdict-to-git.py`  
+**File:** `furigana_solver.py` (called from `jmdict-to-sumatora-db.py` /
+`jmnedict-to-sumatora-db.py` at DB-build time — gitmdict/gitnedict store only
+JMdict/JMnedict source data, not computed furigana)  
 **Functions:** `_parse_segments`, `_solve_ignorant`, `compute_furigana`
 
 ### Output format
@@ -149,7 +151,8 @@ bracket because there is no anchor to split the reading.  The informed solver
 
 ## 4 — Furigana: Kanjidic2 knowledge (reading variants)
 
-**File:** `jmdict-to-git.py`  
+**File:** `furigana_solver.py` (called from `jmdict-to-sumatora-db.py` /
+`jmnedict-to-sumatora-db.py`)  
 **Functions:** `_sokuon`, `_rendaku`, `_on_variants`, `build_knowledge`
 
 Before running the informed solver the pipeline builds a lookup table
@@ -194,7 +197,8 @@ legitimately appear as that character's reading contribution in a compound.
 
 ## 5 — Furigana: informed solver (constrained backtracking)
 
-**File:** `jmdict-to-git.py`  
+**File:** `furigana_solver.py` (called from `jmdict-to-sumatora-db.py` /
+`jmnedict-to-sumatora-db.py`)  
 **Function:** `_split_kanji_run`
 
 Called by `_solve_ignorant` for multi-character kanji runs (two or more
@@ -304,10 +308,11 @@ def apply_patch(data, patch):
             data[key] = value
 ```
 
-Patches are applied to the assembled entry dict after furigana computation and
-before writing the JSON file.  To correct a reading the patch must also include
-corrected `kanji` data with updated `furigana` values, since furigana is
-computed before patching.
+Patches are applied to the assembled entry dict before writing the JSON file.
+Furigana is no longer computed at this stage (see §3–§5) — it is generated
+downstream from the already-patched `kanji`/`kana` data when
+`jmdict-to-sumatora-db.py` builds `sumatora.db`, so a patch that corrects a
+reading no longer needs to carry corrected `furigana` values itself.
 
 `load_patches` silently returns an empty dict when the `patches/entries/`
 directory is absent, so builds without any patches are unaffected.
