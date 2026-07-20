@@ -96,6 +96,54 @@ jobs:
           python3 build-sumatora-db.py -o output/ --split-packs \
             ${{ steps.langs.outputs.flag }}
 
+      # Stage 1 (inside build-sumatora-db.py, above) just regenerated
+      # ~/Code/gitmdict, gitnedict, gitjidic2, gitoeba, gitch from upstream.
+      # Push each into its own repo so it stays a reusable, git-diffable
+      # artifact independent of this repo's release cadence. Needs a PAT
+      # with `contents: write` on all five target repos, since the default
+      # GITHUB_TOKEN can only write to this repo -- see sync-stage1-repo.sh's
+      # header. Skips (not fails) if the secret isn't configured yet, and
+      # won't block the actual dictionary release if a sync fails.
+      - name: Sync stage-1 JSON repos
+        if: ${{ secrets.DICT_REPOS_PAT != '' }}
+        continue-on-error: true
+        env:
+          GH_SYNC_TOKEN: ${{ secrets.DICT_REPOS_PAT }}
+        run: |
+          ./sync-stage1-repo.sh ~/Code/gitmdict  HappyPeng2x/gitmdict  entries translations metadata.json
+          ./sync-stage1-repo.sh ~/Code/gitnedict HappyPeng2x/gitnedict entries metadata.json
+          ./sync-stage1-repo.sh ~/Code/gitjidic2 HappyPeng2x/gitjidic2 characters metadata.json
+          ./sync-stage1-repo.sh ~/Code/gitoeba   HappyPeng2x/gitoeba   sentences translations metadata.json
+          ./sync-stage1-repo.sh ~/Code/gitch     HappyPeng2x/gitch     entries metadata.json
+
+      # gitender is the rendering-ready JSON export of output/sumatora.db
+      # (built above); gitenderml is Jitendex-styled HTML built from that
+      # JSON, for every language gitender has gloss data for. render-entry-
+      # html.py skips writing a card for an (entry, lang) pair with no
+      # translation at all, rather than emitting a "no translation yet"
+      # placeholder for the ~200K entries a low-coverage language lacks, so
+      # this stays proportional to actual translated content rather than
+      # entry-count x language-count. Needs DICT_REPOS_PAT to include these
+      # two repos (same secret as the stage-1 sync above); skips gracefully
+      # if unset.
+      - name: Build gitender + gitenderml
+        if: ${{ secrets.DICT_REPOS_PAT != '' }}
+        continue-on-error: true
+        run: |
+          python3 sumatora-to-git.py -d output/sumatora.db -o ~/Code/gitender
+          python3 render-entry-html.py -i ~/Code/gitender -o ~/Code/gitenderml \
+            --lang dut --lang eng --lang fre --lang ger --lang hun \
+            --lang rus --lang slv --lang spa --lang swe
+
+      - name: Sync gitender + gitenderml
+        if: ${{ secrets.DICT_REPOS_PAT != '' }}
+        continue-on-error: true
+        env:
+          GH_SYNC_TOKEN: ${{ secrets.DICT_REPOS_PAT }}
+        run: |
+          ./sync-stage1-repo.sh ~/Code/gitender   HappyPeng2x/gitender   entries translations
+          ./sync-stage1-repo.sh ~/Code/gitenderml HappyPeng2x/gitenderml eng fre common.css jitendex.css
+
       - name: Gzip, checksum, and render dictionaries.xml
         run: |
           python3 release-dictionaries.py \

@@ -1,0 +1,476 @@
+
+body {
+    font-family: jpgothic, sans-serif;
+    margin-bottom: 1em;
+}
+
+span[title], img[title] {
+    cursor: help;
+}
+
+li > *:first-child {
+    margin-left: 0.2em;
+}
+
+table, th, td {
+    border: 1px solid;
+    border-collapse: collapse;
+    border-color: #d4d4d4;
+}
+
+th, td {
+    padding: 0 0.5em;
+}
+
+th {
+    font-family: jpgothic, sans-serif;
+    color: #333;
+    background-color: #f5f5f1;
+    font-weight: normal;
+    white-space: nowrap;
+}
+
+.headline {
+    font-size: 2em;
+    font-family: jpmincho, serif;
+    margin-bottom: 0.5rem;
+}
+
+.headline.no-furigana {
+    margin-top: 0.5rem;
+}
+
+.headline.priority {
+    margin-top: 0;
+}
+
+.headline.lengthy {
+    font-size: 1.4em;
+    font-family: jpgothic, sans-serif;
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.tag {
+    font-family: jpgothic, sans-serif;
+    font-size: 0.7rem;
+    font-weight: bold;
+    padding-top: 0.15em;
+    padding-bottom: 0.35em;
+    padding-left: 0.3em;
+    padding-right: 0.3em;
+    margin-right: 0.25em;
+    word-break: keep-all;
+    border-style: none;
+    border-radius: 0.2em;
+    color: white;
+    user-select: none;
+    vertical-align: bottom;
+}
+
+.sense {
+    margin-left: 2em;
+}
+
+.sense-list {
+    margin: 0;
+    padding: 0;
+}
+
+.sense-groups {
+    margin: 0;
+    padding: 0;
+    margin-left: 2em;
+    list-style-type: '＊';
+}
+
+.sense-group + .sense-group {
+    margin-top: 0.5em;
+}
+
+.forms {
+    margin-top: 0.5rem;
+}
+
+.forms ul {
+    font-size: 1.3rem;
+    margin: 0;
+    padding: 0;
+}
+
+.forms li {
+    margin-left: 2em;
+}
+
+.forms li:first-child {
+    display: none;
+}
+
+.sense-groups[data-sense-group-count='1'] .sense {
+    margin-left: 0;
+}
+
+/* Can't nest these; goldendict-ng will mangle it */
+.sense-groups[data-sense-count='1'] {
+    margin-left: 1em;
+    list-style-type: none;
+}
+.sense-groups[data-sense-count='1'] .sense-group {
+    display: inline
+}
+.sense-groups[data-sense-count='1'] .sense-list {
+    display: inline;
+    list-style-type: none;
+}
+.sense-groups[data-sense-count='1'] .sense {
+    display: inline;
+    margin-left: 0;
+}
+.sense-groups[data-sense-count='1'] li > *:first-child {
+    margin-left: 0;
+}
+.sense-groups[data-sense-count='1'] .glossary {
+    display: block;
+}
+.sense-groups[data-sense-count='1'] .forms li {
+    margin-left: 1em;
+}
+.sense-groups[data-sense-count='1'] .audio-list {
+    padding-left: 0.25em;
+}
+
+.gaiji {
+    height: 1em;
+    vertical-align: text-bottom;
+}
+
+.audio-list {
+    list-style-type: none;
+    padding-left: 1em;
+}
+
+.audio > a:hover {
+    text-decoration: none;
+}
+
+.audio > a:hover,
+.audio > a:focus,
+.audio > a:active {
+    font-weight: normal;
+    font-family: inherit;
+}
+
+.play-button {
+    margin-right: 0.5em;
+    display: inline-block;
+    background: radial-gradient(white, silver);
+    padding: 0em 0.15em 0em 0.25em;
+    clip-path: circle();
+}
+
+.heiban-symbol, .accent-symbol {
+    height: 1.5em;
+    margin-left: -0.75em;
+    margin-right: -0.5em;
+    user-select: none;
+    vertical-align: -0.25em;
+    background: transparent !important;
+}
+
+.glossary {
+    display: inline;
+    list-style: none;
+    padding-left: 0;
+}
+
+.glossary li {
+    display: inline;
+}
+
+.glossary .gloss {
+    display: inline-table;
+}
+
+.glossary li:not(:last-child)::after {
+    white-space: pre-wrap;
+    content: "; ";
+}
+
+.registered-trademark {
+    vertical-align: super;
+    font-size: 0.6em;
+}
+
+.extra-info {
+    margin-left: 0.5em;
+}
+
+.extra-box {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5em;
+    border-style: none none none solid;
+    border-radius: 0.4em;
+    border-width: 3px;
+    padding: 0.5rem;
+    width: fit-content;
+}
+
+.extra-label {
+    color: #777;
+    font-style: italic;
+    font-variant: small-caps;
+    font-size: 0.9rem;
+}
+
+.extra-content {
+    margin-left: 0.5rem;
+}
+
+.ex-sent {
+    background-color: color-mix(in srgb, gray 5%, transparent);
+}
+
+.info-gloss {
+    border-color: green;
+    background-color: color-mix(in srgb, green 5%, transparent);
+}
+
+.sense-note-container {
+    border-color: goldenrod;
+    background-color: color-mix(in srgb, goldenrod 5%, transparent);
+}
+
+.lang-source-container {
+    border-color: purple;
+    background-color: color-mix(in srgb, purple 5%, transparent);
+}
+
+.xref {
+    border-color: #1A73E8;
+    background-color: color-mix(in srgb, #1A73E8 5%, transparent);
+}
+
+.antonym {
+    border-color: brown;
+    background-color: color-mix(in srgb, brown 5%, transparent);
+}
+
+.xref-content, .antonym-content {
+    font-size: 1.3em;
+}
+
+.ex-sent-ja {
+    font-size: 1.3em;
+}
+
+.ex-sent-ja-footnote {
+    font-size: 0.6em;
+    margin-left: 0.25em;
+    color: #777;
+    vertical-align: top;
+}
+
+.forms-header-row {
+    font-size: 1.3rem;
+}
+
+.forms-header-row th {
+    text-align: center;
+    vertical-align: text-bottom;
+}
+
+.forms-body-row th {
+    text-align: left;
+}
+
+.forms-body-row td {
+    text-align: center;
+}
+
+.forms-col-senses-row th {
+    text-align: center;
+}
+
+th.forms-row-senses {
+    text-align: center;
+}
+
+.priority-symbol {
+    font-size: 0.7rem;
+    color: gold;
+    background-color: #4490a7;
+    margin-left: 0.25em;
+    clip-path: circle();
+    display: inline-block;
+    padding: 0.25em;
+    vertical-align: 1.5em;
+}
+
+.headline.no-furigana.lengthy .priority-symbol {
+    vertical-align: super;
+}
+
+.pronunciation {
+    margin-bottom: 0.5rem;
+}
+
+.pronunciation-label,
+.forms-label,
+.part-of-speech-info {
+    background-color: #565656;
+}
+
+.misc-info {
+    background-color: brown;
+}
+
+.field-info {
+    background-color: purple;
+}
+
+.dialect-info {
+    background-color: green;
+}
+
+.reference-label {
+    font-size: 0.8em;
+    margin-right: 0.5rem;
+}
+
+.xref .reference-label {
+    color: #1A73E8;
+}
+
+.antonym .reference-label {
+    color: brown;
+}
+
+.antonym-glossary, .xref-glossary {
+    font-size: 0.75rem;
+}
+
+.lang-source-wasei {
+    margin-left: 0.25em;
+    color: black;
+    background-color: orange;
+}
+
+.icon {
+    font-size: 0.8rem;
+    padding-right: 0.25em;
+    user-select: none;
+}
+
+.info-gloss-content {
+    font-size: 0.8rem;
+}
+
+.ex-sent-en-content {
+    font-size: 0.8rem;
+}
+
+.ex-sent-ja-keyword {
+    color: green;
+}
+
+.lang-add {
+    font-size: 0.8rem;
+    margin-left: 0.25rem;
+    margin-right: 0.25rem;
+}
+
+.lang-source {
+    font-size: 0.8rem;
+}
+
+.lang-source-word::before {
+    content: ': "';
+}
+
+.lang-source-word::after {
+    content: '"';
+}
+
+.graphic-content {
+    margin-top: 0.5rem;
+    max-height: 250px;
+    max-width: 30rem;
+    border-style: solid;
+    border-radius: 0.4em;
+}
+
+.graphic-attribution {
+    font-size: 0.7em;
+}
+
+.graphic-author {
+    white-space: nowrap;
+}
+
+.graphic-license {
+    white-space: nowrap;
+}
+
+.old-character {
+    text-emphasis-style: dot;
+}
+
+.form-special {
+    color: crimson;
+}
+
+.forms td > span {
+    clip-path: circle();
+    color: white;
+    display: block;
+    font-weight: bold;
+    margin: 0.1em 0;
+    padding: 0 0.5em;
+}
+
+.form-pri > span {
+    background: radial-gradient(green 50%, white 100%);
+    &::before {
+        content: "△";
+    }
+}
+
+.form-irr > span {
+    background: radial-gradient(crimson 50%, white 100%);
+    &::before {
+        content: "✕";
+    }
+}
+
+.form-out > span {
+    background: radial-gradient(blue 50%, white 100%);
+    &::before {
+        content: "古";
+    }
+}
+
+.form-old > span {
+    background: radial-gradient(blue 50%, white 100%);
+    &::before {
+        content: "旧";
+    }
+}
+
+.form-rare > span {
+    background: radial-gradient(purple 50%, white 100%);
+    &::before {
+        content: "▽";
+    }
+}
+
+.form-valid > span {
+    background: radial-gradient(black 50%, white 100%);
+    &::before {
+        content: "◇";
+    }
+}
+
+.entry-footnotes {
+    font-size: 0.7em;
+    text-align: right;
+}
