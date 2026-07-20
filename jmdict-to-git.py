@@ -179,6 +179,39 @@ def load_patches(patches_dir):
     return patches
 
 
+def load_translation_patches(patches_dir):
+    """Return {(seq, lang): patch_dict} for all JSON files under
+    patches_dir/translations/{lang}/.
+
+    Directory structure mirrors gitmdict/translations/{lang}/{shard}/{seq}.json.
+    Unlike load_patches() (entries, always pre-existing), a translation patch
+    may introduce a language an entry had no raw JMdict gloss in at all -- see
+    process()'s handling of patch-only languages.
+    """
+    patches = {}
+    translations_dir = os.path.join(patches_dir, 'translations')
+    if not os.path.isdir(translations_dir):
+        return patches
+    for lang in sorted(os.listdir(translations_dir)):
+        lang_dir = os.path.join(translations_dir, lang)
+        if not os.path.isdir(lang_dir):
+            continue
+        for root, dirs, files in os.walk(lang_dir):
+            dirs.sort()
+            for name in sorted(files):
+                if not name.endswith('.json'):
+                    continue
+                try:
+                    seq = int(name[:-5])
+                except ValueError:
+                    continue
+                with open(os.path.join(root, name), encoding='utf-8') as f:
+                    patches[(seq, lang)] = json.load(f)
+    if patches:
+        print(f'  {len(patches)} translation patches loaded from {patches_dir}', flush=True)
+    return patches
+
+
 def apply_patch(data, patch):
     """Apply an RFC 7396 JSON Merge Patch to data in-place.
 
@@ -307,7 +340,12 @@ def write_json(path, data):
 # ---------------------------------------------------------------------------
 
 def process(output_dir, cache_dir, patches_dir=None):
-    patches = load_patches(patches_dir if patches_dir is not None else _DEFAULT_PATCHES_DIR)
+    patches_dir = patches_dir if patches_dir is not None else _DEFAULT_PATCHES_DIR
+    patches = load_patches(patches_dir)
+    translation_patches = load_translation_patches(patches_dir)
+    patch_langs_by_seq = {}
+    for (patch_seq, patch_lang) in translation_patches:
+        patch_langs_by_seq.setdefault(patch_seq, set()).add(patch_lang)
 
     jmdict_path = ensure_cached(JMDICT_URL, cache_dir)
     print(f'  Using {jmdict_path}', flush=True)
@@ -338,11 +376,16 @@ def process(output_dir, cache_dir, patches_dir=None):
                 os.path.join(output_dir, 'entries', str(sh), f'{seq}.json'),
                 entry_data,
             )
-            for lang, glosses in lang_glosses.items():
+            langs_here = set(lang_glosses) | patch_langs_by_seq.get(seq, set())
+            for lang in langs_here:
+                translation = {'seq': seq, 'lang': lang, 'glosses': lang_glosses.get(lang, [])}
+                patch = translation_patches.get((seq, lang))
+                if patch is not None:
+                    apply_patch(translation, patch)
                 write_json(
                     os.path.join(output_dir, 'translations', lang,
                                  str(sh), f'{seq}.json'),
-                    {'seq': seq, 'lang': lang, 'glosses': glosses},
+                    translation,
                 )
 
             entry_count += 1
