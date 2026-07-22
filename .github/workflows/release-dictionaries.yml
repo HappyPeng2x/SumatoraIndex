@@ -8,8 +8,9 @@ name: Release dictionaries
 # single upstream producer every client (Android, desktop, PWA) should fetch
 # from, so there is exactly one canonical release/manifest location.
 #
-# Runs on a monthly schedule (JMdict/JMnedict/Tatoeba don't need more
-# frequent republishing) and can always be triggered manually.
+# Runs on a weekly schedule to keep pace with upstream JMdict's release
+# cadence and give users a sense of freshness, and can always be triggered
+# manually.
 
 on:
   workflow_dispatch:
@@ -23,7 +24,7 @@ on:
         required: false
         default: eng,ger,rus,spa,dut,hun,swe,fre,slv
   schedule:
-    - cron: '0 3 1 * *'  # 03:00 UTC on the 1st of every month
+    - cron: '0 3 * * 1'  # 03:00 UTC every Monday
 
 permissions:
   contents: write
