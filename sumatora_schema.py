@@ -101,7 +101,13 @@ CREATE TABLE Sense (
     sense_group_id INTEGER NOT NULL REFERENCES SenseGroup(sense_group_id),
     source_ord     INTEGER NOT NULL,
     ord            INTEGER NOT NULL,
-    display_number INTEGER
+    display_number INTEGER,
+    -- Denormalized copy of Entry.source_key (not a join, since split-sumatora-packs.py
+    -- drops Entry entirely from gloss/tatoeba packs). entry_id is a plain rowid, reassigned
+    -- from scratch on every SumatoraIndex build, so it isn't safe to use as a cross-pack
+    -- join key once a gloss/examples pack from one release gets attached alongside a core
+    -- pack from a later one - (entry_source_key, source_ord) is the stable substitute.
+    entry_source_key TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE SenseGloss (
@@ -173,6 +179,13 @@ CREATE TABLE EntryExample (
     ord           INTEGER NOT NULL,
     matched_text  TEXT,
     sense_id      INTEGER REFERENCES Sense(sense_id),
+    -- Same rationale as Sense.entry_source_key above: split-sumatora-packs.py drops both
+    -- Entry and Sense from examples_xx packs, so entry_id/sense_id alone can't survive a
+    -- cross-release attach. sense_id always belongs to this same entry_id (see
+    -- gitoeba-to-sumatora-db.py's _sense_id lookup), so entry_source_key doubles as the
+    -- stable entry half of the sense's key too - only its ordinal half needs its own column.
+    entry_source_key TEXT NOT NULL DEFAULT '',
+    sense_source_ord INTEGER,
     PRIMARY KEY (entry_id, example_id)
 );
 
@@ -299,12 +312,19 @@ CREATE INDEX SenseEntry ON Sense(entry_id, ord);
 CREATE INDEX SenseSenseGroup ON Sense(sense_group_id, ord);
 CREATE INDEX SenseGroupEntry ON SenseGroup(entry_id, ord);
 CREATE INDEX SenseAppliesForm ON SenseAppliesToForm(form_id, sense_id);
+-- Lets a client resolve a core.Sense row to its gloss_xx.Sense/examples_xx.Sense
+-- counterpart (or vice versa) by (entry_source_key, source_ord) instead of sense_id, so the
+-- lookup still works when the two packs were built by different SumatoraIndex releases -
+-- see Sense.entry_source_key above.
+CREATE INDEX SenseSourceKey ON Sense(entry_source_key, source_ord);
 
 CREATE INDEX SenseGlossLang ON SenseGloss(lang, text);
 CREATE INDEX SenseReferenceSense ON SenseReference(sense_id, reference_type, ord);
 CREATE INDEX SenseReferenceTarget ON SenseReference(target_entry_id);
 
 CREATE INDEX EntryExampleEntry ON EntryExample(entry_id, ord);
+-- Stable cross-pack join key - see EntryExample.entry_source_key above.
+CREATE INDEX EntryExampleSourceKey ON EntryExample(entry_source_key, ord);
 CREATE INDEX FormPitchForm ON FormPitch(form_id);
 CREATE INDEX PitchLookup ON PitchAccent(word, reading);
 CREATE INDEX PitchReading ON PitchAccent(reading);

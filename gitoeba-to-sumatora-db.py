@@ -125,13 +125,20 @@ class TokenResolver:
 
 
 def _sense_id(conn, entry_id, sense_number):
+    """Returns (sense_id, source_ord) for the matched sense, or (None, None).
+
+    source_ord travels alongside sense_id all the way to EntryExample.sense_source_ord -
+    sense_id is a rowid, not stable once a pack from one SumatoraIndex release is attached
+    next to a pack from another (see Sense.entry_source_key in sumatora_schema.py); this
+    entry's own source_ord + EntryExample.entry_source_key is the stable substitute.
+    """
     if sense_number is None:
-        return None
+        return None, None
     row = conn.execute(
-        'SELECT sense_id FROM Sense WHERE entry_id = ? AND display_number = ?',
+        'SELECT sense_id, source_ord FROM Sense WHERE entry_id = ? AND display_number = ?',
         (entry_id, sense_number),
     ).fetchone()
-    return row[0] if row else None
+    return row if row else (None, None)
 
 
 def _insert_example(conn, source_id, sentence_id, lang, translation, segments):
@@ -160,6 +167,10 @@ def process(gitoeba_dir, unidic_dir, db_path):
     source_id = sumatora_schema.source_id(conn, 'tatoeba')
     resolver = TokenResolver(conn)
     tokenizer = MecabTokenizer(unidic_dir)
+    # entry_id is a rowid reassigned from scratch on every build, so EntryExample denormalizes
+    # the entry's stable source_key onto every row instead (see sumatora_schema.py) - this is
+    # the one place that maps entry_id -> source_key before EntryExample splits away from Entry.
+    entry_source_key_by_id = dict(conn.execute('SELECT entry_id, source_key FROM Entry'))
 
     sentences_dir = os.path.join(gitoeba_dir, 'sentences')
     translations_dir = os.path.join(gitoeba_dir, 'translations')
@@ -182,8 +193,8 @@ def process(gitoeba_dir, unidic_dir, db_path):
             for entry_id, form_id in resolver.resolve(
                 token['writing'], token.get('reading'), token.get('entryId'),
             ):
-                sense_id = _sense_id(conn, entry_id, token.get('senseNumber'))
-                entry_links.setdefault(entry_id, (form_id, matched_text, sense_id))
+                sense_id, sense_source_ord = _sense_id(conn, entry_id, token.get('senseNumber'))
+                entry_links.setdefault(entry_id, (form_id, matched_text, sense_id, sense_source_ord))
         if entry_links:
             entry_cache[sent_id] = entry_links
             segment_cache[sent_id] = _sentence_segments(
@@ -214,11 +225,11 @@ def process(gitoeba_dir, unidic_dir, db_path):
                 continue
             translation_by_sent[sent_id] = translation['translation']
 
-        by_entry = defaultdict(list)  # entry_id -> [(quality, sent_id, form_id, matched_text, sense_id), ...]
+        by_entry = defaultdict(list)  # entry_id -> [(quality, sent_id, form_id, matched_text, sense_id, sense_source_ord), ...]
         for sent_id in translation_by_sent:
             quality = _sentence_quality(sentences[sent_id]['text'])
-            for entry_id, (form_id, matched_text, sense_id) in entry_cache[sent_id].items():
-                by_entry[entry_id].append((quality, sent_id, form_id, matched_text, sense_id))
+            for entry_id, (form_id, matched_text, sense_id, sense_source_ord) in entry_cache[sent_id].items():
+                by_entry[entry_id].append((quality, sent_id, form_id, matched_text, sense_id, sense_source_ord))
 
         kept_sent_ids = set()
         ranked_by_entry = {}
@@ -243,11 +254,14 @@ def process(gitoeba_dir, unidic_dir, db_path):
         example_count += lang_examples
 
         for entry_id, ranked in ranked_by_entry.items():
-            for ord_, (_quality, sent_id, form_id, matched_text, sense_id) in enumerate(ranked):
+            entry_source_key = entry_source_key_by_id[entry_id]
+            for ord_, (_quality, sent_id, form_id, matched_text, sense_id, sense_source_ord) in enumerate(ranked):
                 conn.execute(
                     'INSERT OR IGNORE INTO EntryExample '
-                    '(entry_id, example_id, ord, matched_text, sense_id) VALUES (?, ?, ?, ?, ?)',
-                    (entry_id, example_id_by_sent[sent_id], ord_, matched_text, sense_id),
+                    '(entry_id, example_id, ord, matched_text, sense_id, entry_source_key, '
+                    'sense_source_ord) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (entry_id, example_id_by_sent[sent_id], ord_, matched_text, sense_id,
+                     entry_source_key, sense_source_ord),
                 )
                 link_count += 1
         print(f'  {lang}: {lang_examples} examples, <= {_MAX_EXAMPLES_PER_ENTRY} per entry', flush=True)

@@ -354,9 +354,9 @@ def _pass2_senses(c, entries_dir, translations_dir, entities, tags,
             )
             sense_group_id = c.lastrowid
             c.execute(
-                'INSERT INTO Sense (entry_id, sense_group_id, source_ord, ord, display_number) '
-                'VALUES (?, ?, ?, ?, ?)',
-                (entry_id, sense_group_id, i, i, i + 1),
+                'INSERT INTO Sense (entry_id, sense_group_id, source_ord, ord, display_number, '
+                'entry_source_key) VALUES (?, ?, ?, ?, ?, ?)',
+                (entry_id, sense_group_id, i, i, i + 1, str(seq)),
             )
             sense_id = c.lastrowid
             sense_ids.append(sense_id)
@@ -449,8 +449,9 @@ def _pass2_senses(c, entries_dir, translations_dir, entities, tags,
                     )
                     sgid = c.lastrowid
                     c.execute(
-                        'INSERT INTO Sense (entry_id, sense_group_id, source_ord, ord) VALUES (?, ?, ?, ?)',
-                        (entry_id, sgid, idx, idx),
+                        'INSERT INTO Sense (entry_id, sense_group_id, source_ord, ord, '
+                        'entry_source_key) VALUES (?, ?, ?, ?, ?)',
+                        (entry_id, sgid, idx, idx, str(seq)),
                     )
                     sid = c.lastrowid
                     sense_ids.append(sid)
