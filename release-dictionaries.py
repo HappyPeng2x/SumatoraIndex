@@ -107,6 +107,14 @@ def _sort_key(pack):
     return (_TYPE_ORDER.get(pack_type, 99), lang, filename)
 
 
+def _sha256_file(path):
+    sha256 = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
 def gzip_and_checksum(packs_dir, release_dir):
     """Gzip every sumatora_*.db under packs_dir into release_dir.
 
@@ -126,21 +134,22 @@ def gzip_and_checksum(packs_dir, release_dir):
         with open(src_path, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
 
-        sha256 = hashlib.sha256()
-        with open(gz_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(1 << 20), b''):
-                sha256.update(chunk)
-
-        packs.append((gz_filename, pack_type, lang, description, sha256.hexdigest()))
-        print(f'  {filename} -> {gz_filename} ({sha256.hexdigest()[:12]}...)', flush=True)
+        sha256 = _sha256_file(gz_path)
+        packs.append((gz_filename, pack_type, lang, description, sha256))
+        print(f'  {filename} -> {gz_filename} ({sha256[:12]}...)', flush=True)
 
     packs.sort(key=lambda p: _sort_key((p[0], (p[1], p[2], p[3]))))
     return packs
 
 
-def render_manifest(packs, version, date, download_base_url):
+def render_manifest(packs, version, date, download_base_url,
+                     changelog_url=None, changelog_sha256=None):
     """Build the dictionaries.xml ElementTree for the given packs."""
-    repository = ET.Element('repository', version=str(version), date=str(date))
+    attrs = {'version': str(version), 'date': str(date)}
+    if changelog_url:
+        attrs['changelog'] = changelog_url
+        attrs['changelog_sha256'] = changelog_sha256
+    repository = ET.Element('repository', attrs)
     for gz_filename, pack_type, lang, description, sha256 in packs:
         ET.SubElement(repository, 'dictionary', {
             'uri': f'{download_base_url}/{gz_filename}',
@@ -175,6 +184,9 @@ def main(argv):
     parser.add_argument('--download-base-url', required=True,
                          help='base URL packs are downloadable from, e.g. '
                               'https://github.com/OWNER/REPO/releases/download/TAG')
+    parser.add_argument('--changelog-path',
+                         help='optional path to a changelog.json (build-changelog.py output) '
+                              'to checksum and reference from the manifest; ignored if absent')
     parser.add_argument('-o', '--manifest', required=True,
                          help='output path for dictionaries.xml')
     args = parser.parse_args(argv)
@@ -185,7 +197,15 @@ def main(argv):
         print(f'error: no sumatora_*.db packs found in {args.packs_dir}', file=sys.stderr)
         return 1
 
-    repository = render_manifest(packs, args.version, args.date, args.download_base_url)
+    changelog_url = None
+    changelog_sha256 = None
+    if args.changelog_path and os.path.isfile(args.changelog_path):
+        changelog_sha256 = _sha256_file(args.changelog_path)
+        changelog_url = f'{args.download_base_url}/changelog.json'
+        print(f'  changelog.json -> ({changelog_sha256[:12]}...)', flush=True)
+
+    repository = render_manifest(packs, args.version, args.date, args.download_base_url,
+                                  changelog_url=changelog_url, changelog_sha256=changelog_sha256)
     write_manifest(repository, args.manifest)
 
     total_size = sum(os.path.getsize(os.path.join(args.release_dir, p[0])) for p in packs)

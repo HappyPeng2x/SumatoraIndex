@@ -42,6 +42,15 @@ for path in "${GENERATED_PATHS[@]}"; do
 done
 
 git add -A -- "${GENERATED_PATHS[@]}"
+
+# Optional: capture an exact add/modify/delete diff against the previous
+# release's snapshot (this clone's HEAD, since it's `--depth 1`) for
+# build-changelog.py to consume. No-op when unset, so manual/local
+# invocations behave exactly as before this was added.
+if [ -n "${DIFF_OUT:-}" ]; then
+  git diff --cached --name-status -- "${GENERATED_PATHS[@]}" > "$DIFF_OUT"
+fi
+
 if git diff --cached --quiet; then
   echo "  $REPO_SLUG: no changes"
 else

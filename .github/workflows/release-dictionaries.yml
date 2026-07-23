@@ -77,6 +77,7 @@ jobs:
           fi
           NEXT=$((CURRENT + 1))
           DATE=$(date -u +%Y%m%d)
+          echo "current_version=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "tag=dictionaries-v$NEXT" >> "$GITHUB_OUTPUT"
@@ -116,11 +117,25 @@ jobs:
         env:
           GH_SYNC_TOKEN: ${{ secrets.DICT_REPOS_PAT }}
         run: |
-          ./sync-stage1-repo.sh ~/Code/gitmdict  HappyPeng2x/gitmdict  entries translations metadata.json
-          ./sync-stage1-repo.sh ~/Code/gitnedict HappyPeng2x/gitnedict entries metadata.json
-          ./sync-stage1-repo.sh ~/Code/gitjidic2 HappyPeng2x/gitjidic2 characters metadata.json
-          ./sync-stage1-repo.sh ~/Code/gitoeba   HappyPeng2x/gitoeba   sentences translations metadata.json
-          ./sync-stage1-repo.sh ~/Code/gitch     HappyPeng2x/gitch     entries metadata.json
+          mkdir -p /tmp/stage1-diffs
+          DIFF_OUT=/tmp/stage1-diffs/gitmdict.diff  ./sync-stage1-repo.sh ~/Code/gitmdict  HappyPeng2x/gitmdict  entries translations metadata.json
+          DIFF_OUT=/tmp/stage1-diffs/gitnedict.diff ./sync-stage1-repo.sh ~/Code/gitnedict HappyPeng2x/gitnedict entries metadata.json
+          DIFF_OUT=/tmp/stage1-diffs/gitjidic2.diff ./sync-stage1-repo.sh ~/Code/gitjidic2 HappyPeng2x/gitjidic2 characters metadata.json
+          DIFF_OUT=/tmp/stage1-diffs/gitoeba.diff   ./sync-stage1-repo.sh ~/Code/gitoeba   HappyPeng2x/gitoeba   sentences translations metadata.json
+          DIFF_OUT=/tmp/stage1-diffs/gitch.diff     ./sync-stage1-repo.sh ~/Code/gitch     HappyPeng2x/gitch     entries metadata.json
+
+      # Unconditional (unlike the sync step above): build-changelog.py treats
+      # a missing <repo>.diff as "no changes for that repo", so this never
+      # fails even when DICT_REPOS_PAT isn't configured and no diffs exist.
+      - name: Build changelog
+        run: |
+          mkdir -p release
+          python3 build-changelog.py \
+            --diffs-dir /tmp/stage1-diffs \
+            --version ${{ steps.version.outputs.next_version }} \
+            --previous-version ${{ steps.version.outputs.current_version }} \
+            --date ${{ steps.version.outputs.date }} \
+            -o release/changelog.json
 
       # gitender is the rendering-ready JSON export of output/sumatora.db
       # (built above); gitenderml is Jitendex-styled HTML built from that
@@ -159,6 +174,7 @@ jobs:
             --version ${{ steps.version.outputs.next_version }} \
             --date ${{ steps.version.outputs.date }} \
             --download-base-url "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}" \
+            --changelog-path release/changelog.json \
             -o dictionaries.xml
 
       - name: Publish release
@@ -169,7 +185,7 @@ jobs:
           # Idempotent: a retry of a failed run targeting the same version
           # replaces the partial release instead of erroring on "already exists".
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" release/*.db.gz \
+          gh release create "$TAG" release/*.db.gz release/changelog.json \
             --title "Dictionaries v${{ steps.version.outputs.next_version }} (${{ steps.version.outputs.date }})" \
             --notes "Automated dictionary pack rebuild. See dictionaries.xml on master for the current manifest."
 
