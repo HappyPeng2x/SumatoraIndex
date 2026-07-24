@@ -6,10 +6,15 @@ directory) and produces:
 
   - one gzip-compressed copy of each pack under --release-dir, named
     exactly as it should appear as a GitHub Release asset (<pack>.db.gz)
+  - one uncompressed copy of each pack (<pack>.db), also published as a
+    release asset, so clients can query it directly over HTTP Range
+    requests without downloading the whole file — see sumatora-pwa's
+    ui-parity-and-remote-search-plan.md ("Phase E") for why this exists.
+    Gzip streams aren't seekable, hence the separate plain copy.
   - a dictionaries.xml manifest in the shape SumatoraDictionary's
     BaseDictionaryObject.fromXML / RemoteManifestFetcher already parse: one
     <repository version=".." date=".."> with a <dictionary> child per pack
-    (uri, type, description, lang, sha256).
+    (uri, plain_uri, type, description, lang, sha256, plain_sha256).
 
 See release-pipeline.md for the full design (why this lives in
 SumatoraIndex, the version/date bootstrap, and how the workflow uses this
@@ -103,8 +108,8 @@ _TYPE_ORDER = {'core': 0, 'kanji': 1, 'pitch': 2, 'suffix': 3, 'names': 4,
 
 
 def _sort_key(pack):
-    filename, (pack_type, lang, _description) = pack
-    return (_TYPE_ORDER.get(pack_type, 99), lang, filename)
+    gz_filename, _plain_filename, pack_type, lang, _description, _sha256, _plain_sha256 = pack
+    return (_TYPE_ORDER.get(pack_type, 99), lang, gz_filename)
 
 
 def _sha256_file(path):
@@ -116,9 +121,10 @@ def _sha256_file(path):
 
 
 def gzip_and_checksum(packs_dir, release_dir):
-    """Gzip every sumatora_*.db under packs_dir into release_dir.
+    """Gzip every sumatora_*.db under packs_dir into release_dir, and also
+    copy each one uncompressed into release_dir for Range-request access.
 
-    Returns a list of (gz_filename, pack_type, lang, description, sha256).
+    Returns a list of (gz_filename, plain_filename, pack_type, lang, description, sha256, plain_sha256).
     """
     os.makedirs(release_dir, exist_ok=True)
     packs = []
@@ -130,15 +136,18 @@ def gzip_and_checksum(packs_dir, release_dir):
         src_path = os.path.join(packs_dir, filename)
         gz_filename = filename + '.gz'
         gz_path = os.path.join(release_dir, gz_filename)
+        plain_path = os.path.join(release_dir, filename)
 
         with open(src_path, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
+        shutil.copy2(src_path, plain_path)
 
         sha256 = _sha256_file(gz_path)
-        packs.append((gz_filename, pack_type, lang, description, sha256))
-        print(f'  {filename} -> {gz_filename} ({sha256[:12]}...)', flush=True)
+        plain_sha256 = _sha256_file(plain_path)
+        packs.append((gz_filename, filename, pack_type, lang, description, sha256, plain_sha256))
+        print(f'  {filename} -> {gz_filename} ({sha256[:12]}...), plain ({plain_sha256[:12]}...)', flush=True)
 
-    packs.sort(key=lambda p: _sort_key((p[0], (p[1], p[2], p[3]))))
+    packs.sort(key=_sort_key)
     return packs
 
 
@@ -150,13 +159,15 @@ def render_manifest(packs, version, date, download_base_url,
         attrs['changelog'] = changelog_url
         attrs['changelog_sha256'] = changelog_sha256
     repository = ET.Element('repository', attrs)
-    for gz_filename, pack_type, lang, description, sha256 in packs:
+    for gz_filename, plain_filename, pack_type, lang, description, sha256, plain_sha256 in packs:
         ET.SubElement(repository, 'dictionary', {
             'uri': f'{download_base_url}/{gz_filename}',
+            'plain_uri': f'{download_base_url}/{plain_filename}',
             'type': pack_type,
             'description': description,
             'lang': lang,
             'sha256': sha256,
+            'plain_sha256': plain_sha256,
         })
     return repository
 
@@ -208,8 +219,10 @@ def main(argv):
                                   changelog_url=changelog_url, changelog_sha256=changelog_sha256)
     write_manifest(repository, args.manifest)
 
-    total_size = sum(os.path.getsize(os.path.join(args.release_dir, p[0])) for p in packs)
-    print(f'Done: {len(packs)} packs, {total_size / 1_000_000:.1f}MB compressed, '
+    gz_size = sum(os.path.getsize(os.path.join(args.release_dir, p[0])) for p in packs)
+    plain_size = sum(os.path.getsize(os.path.join(args.release_dir, p[1])) for p in packs)
+    print(f'Done: {len(packs)} packs, {gz_size / 1_000_000:.1f}MB compressed + '
+          f'{plain_size / 1_000_000:.1f}MB plain (for Range-request access), '
           f'version={args.version} date={args.date} -> {args.manifest}', flush=True)
     return 0
 

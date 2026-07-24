@@ -185,7 +185,7 @@ jobs:
           # Idempotent: a retry of a failed run targeting the same version
           # replaces the partial release instead of erroring on "already exists".
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" release/*.db.gz release/changelog.json \
+          gh release create "$TAG" release/*.db.gz release/*.db release/changelog.json \
             --title "Dictionaries v${{ steps.version.outputs.next_version }} (${{ steps.version.outputs.date }})" \
             --notes "Automated dictionary pack rebuild. See dictionaries.xml on master for the current manifest."
 
