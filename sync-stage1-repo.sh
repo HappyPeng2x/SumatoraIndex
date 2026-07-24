@@ -23,9 +23,18 @@ if [ -z "${GH_SYNC_TOKEN:-}" ]; then
 fi
 
 WORKDIR=$(mktemp -d)
-trap 'rm -rf "$WORKDIR"' EXIT
+# Tolerate cleanup failure: on a large repo (e.g. gitender, ~800K files) git
+# push can leave a gc/maintenance process writing into .git in the
+# background, racing this rm -rf and making it fail with "Directory not
+# empty". A bare `rm -rf "$WORKDIR"` here would then make ITS exit status
+# the whole script's exit status (bash gives an EXIT trap's own exit code
+# to the script, unless the trap calls exit itself) even though the actual
+# sync work above already succeeded -- so `|| true` it.
+trap 'rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
 
-git clone --depth 1 "https://x-access-token:${GH_SYNC_TOKEN}@github.com/${REPO_SLUG}.git" "$WORKDIR/repo"
+# gc.auto=0: this clone is deleted within seconds regardless, so there's no
+# benefit to background gc -- only the risk of the race described above.
+git -c gc.auto=0 clone --depth 1 "https://x-access-token:${GH_SYNC_TOKEN}@github.com/${REPO_SLUG}.git" "$WORKDIR/repo"
 cd "$WORKDIR/repo"
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
