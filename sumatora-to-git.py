@@ -7,12 +7,23 @@ but writes structured JSON instead of a terminal card, split by language the
 same way gitmdict is:
 
     entries/{shard}/{seq}.json              language-neutral: forms with
-                                             furigana, sense-group tags,
-                                             per-sense applicable-forms and
+                                             furigana and pitch accent,
+                                             sense-group tags, per-sense
+                                             applicable-forms, notes,
+                                             xrefs/antonyms (target seq
+                                             resolved at export time),
+                                             language-of-origin, and
                                              Japanese example text/furigana,
-                                             alternate-forms table
+                                             plus the alternate-forms table
     translations/{lang}/{shard}/{seq}.json  per language: glosses per sense
                                              and example translations
+
+Notes/xrefs/antonyms/language-of-origin are JMdict-native text, not
+per-UI-language translations, so they live in the language-neutral file,
+never under translations/. Pitch accent is read from PitchAccent/
+PitchPattern/FormPitch, which exist in this monolithic sumatora.db even
+though the pitch pack is a separate optional client download -- this lets
+every client get pitch accent for free, no extra pack install required.
 
 shard = seq // SHARD_SIZE, matching gitmdict's own convention -- seq (the
 JMdict sequence number, Entry.source_key) is used as the filename rather
@@ -51,6 +62,22 @@ def furigana_segments(conn, form_id):
         (form_id,)).fetchall()]
 
 
+def form_pitch(conn, form_id):
+    """Pitch accent for one form, if the (optional, separately-downloadable
+    for clients) pitch pack's source data covers it. positions is a list
+    since a word/reading can have more than one accepted accent pattern."""
+    row = conn.execute(
+        "SELECT pitch_id, confidence FROM FormPitch WHERE form_id = ?", (form_id,)).fetchone()
+    if row is None:
+        return None
+    pitch_id, confidence = row
+    positions = [p for (p,) in conn.execute(
+        "SELECT position FROM PitchPattern WHERE pitch_id = ? ORDER BY ord", (pitch_id,)).fetchall()]
+    if not positions:
+        return None
+    return {'positions': positions, 'confidence': confidence}
+
+
 def build_forms_json(conn, forms):
     out = []
     for f in forms:
@@ -64,6 +91,9 @@ def build_forms_json(conn, forms):
         segs = furigana_segments(conn, f['form_id'])
         if segs:
             entry['furigana'] = segs
+        pitch = form_pitch(conn, f['form_id'])
+        if pitch:
+            entry['pitch'] = pitch
         out.append(entry)
     return out
 
@@ -79,6 +109,39 @@ def applies_to_forms(conn, sense_id):
     return [text for (text,) in conn.execute(
         "SELECT ef.text FROM SenseAppliesToForm s JOIN EntryForm ef ON ef.form_id = s.form_id "
         "WHERE s.sense_id = ?", (sense_id,)).fetchall()]
+
+
+def sense_notes(conn, sense_id):
+    return [t for (t,) in conn.execute(
+        "SELECT text FROM SenseNote WHERE sense_id = ? ORDER BY ord", (sense_id,)).fetchall()]
+
+
+def sense_language_sources(conn, sense_id):
+    rows = conn.execute(
+        "SELECT lang, text, is_full, is_wasei FROM SenseLanguageSource "
+        "WHERE sense_id = ? ORDER BY ord", (sense_id,)).fetchall()
+    return [{'lang': lang, 'text': text, 'isFull': bool(is_full), 'isWasei': bool(is_wasei)}
+            for lang, text, is_full, is_wasei in rows]
+
+
+def sense_references(conn, sense_id, reference_type):
+    """xref or antonym list for one sense. target_entry_id (unstable across
+    builds) is resolved to the target's seq at export time here, since
+    gitender addresses everything by seq -- never the internal entry_id."""
+    rows = conn.execute(
+        "SELECT sr.display_text, e.source_key, sr.target_sense_number "
+        "FROM SenseReference sr LEFT JOIN Entry e ON e.entry_id = sr.target_entry_id "
+        "WHERE sr.sense_id = ? AND sr.reference_type = ? ORDER BY sr.ord",
+        (sense_id, reference_type)).fetchall()
+    out = []
+    for text, target_source_key, target_sense_number in rows:
+        item = {'text': text}
+        if target_source_key is not None:
+            item['targetSeq'] = int(target_source_key)
+        if target_sense_number is not None:
+            item['targetSenseNumber'] = target_sense_number
+        out.append(item)
+    return out
 
 
 def example_for_sense(conn, entry_id, sense_id, first_sense_id):
@@ -181,6 +244,18 @@ def build_entry_json(conn, entry_id, seq):
             ja = example_japanese(conn, example_id)
             if ja:
                 sense_entry['example'] = ja
+        notes = sense_notes(conn, sense_id)
+        if notes:
+            sense_entry['notes'] = notes
+        xrefs = sense_references(conn, sense_id, 'xref')
+        if xrefs:
+            sense_entry['xrefs'] = xrefs
+        antonyms = sense_references(conn, sense_id, 'antonym')
+        if antonyms:
+            sense_entry['antonyms'] = antonyms
+        language_sources = sense_language_sources(conn, sense_id)
+        if language_sources:
+            sense_entry['languageSources'] = language_sources
         sense_groups[sense_group_id]['senses'].append(sense_entry)
 
     return {
