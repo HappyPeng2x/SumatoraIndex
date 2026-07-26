@@ -283,6 +283,96 @@ def _web_search(src, out_dir):
         conn.close()
 
 
+def _web_gloss(core_path, gloss_path, out_dir, lang):
+    """Build the small, range-request-friendly reverse-gloss prefix index
+    used by the PWA's online mode, for one already-built gloss language pack.
+
+    Natural-language gloss prefixes are far broader than Japanese kana/kanji
+    ones -- common words recur across huge numbers of definitions. A single
+    Latin letter typed mid-romaji-entry (e.g. "w" while typing "wo") triggers
+    exactly this reverse search when the forward search comes up empty, and a
+    live prefix scan over it can take tens of seconds online. Same fix as
+    WebSearchPrefixTop (select by raw candidate count, not by length; read
+    prefixes from the FTS5 tokenizer's own output via fts5vocab, not
+    substr(), since multi-word glosses tokenize on spaces), applied to the
+    reverse-gloss tier instead of the forward-word tier.
+
+    Unlike WebSearchPrefixTop, this pack carries only the covering index --
+    no FTS5 table of its own -- because the fallback path for prefixes that
+    weren't broad enough to materialize can just use the language's regular
+    already-attached sumatora_gloss_{lang}.db pack's live GlossSearchFts,
+    exactly as it does today.
+    """
+    path = os.path.join(out_dir, f'sumatora_web_gloss_{lang}.db')
+    os.makedirs(out_dir, exist_ok=True)
+    if os.path.exists(path):
+        os.unlink(path)
+
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute('PRAGMA page_size = 16384')
+        conn.execute('PRAGMA journal_mode = OFF')
+        conn.execute('PRAGMA synchronous = OFF')
+        conn.executescript(
+            """
+            CREATE TABLE WebGlossPrefixTop (
+                prefix     TEXT NOT NULL,
+                sense_ord  INTEGER NOT NULL,
+                entry_id   INTEGER NOT NULL,
+                source_key INTEGER NOT NULL,
+                PRIMARY KEY (prefix, sense_ord, entry_id, source_key)
+            ) WITHOUT ROWID;
+            """
+        )
+        conn.execute('ATTACH DATABASE ? AS gloss', (gloss_path,))
+        conn.execute('ATTACH DATABASE ? AS core', (core_path,))
+        conn.execute(
+            "CREATE VIRTUAL TABLE temp.web_gloss_vocab "
+            "USING fts5vocab('gloss', 'GlossSearchFts', 'instance')"
+        )
+        conn.execute(
+            f"""
+            INSERT INTO WebGlossPrefixTop(prefix, sense_ord, entry_id, source_key)
+            SELECT prefix, sense_ord, entry_id, source_key
+            FROM (
+                SELECT
+                    dedup.*,
+                    COUNT(*) OVER (PARTITION BY prefix) AS group_size,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY prefix ORDER BY sense_ord, entry_id
+                    ) AS rn
+                FROM (
+                    SELECT
+                        substr(v.term, 1, lengths.n) AS prefix,
+                        MIN(s.ord) AS sense_ord, s.entry_id AS entry_id,
+                        CAST(e.source_key AS INTEGER) AS source_key
+                    FROM temp.web_gloss_vocab AS v
+                    JOIN gloss.SenseGloss AS sg ON sg.rowid = v.doc
+                    JOIN core.Sense AS s ON s.sense_id = sg.sense_id
+                    JOIN core.Entry AS e ON e.entry_id = s.entry_id
+                    JOIN (
+                        SELECT 1 AS n
+                        {''.join(f' UNION ALL SELECT {n}' for n in range(2, _PREFIX_TOP_MAX_LEN + 1))}
+                    ) AS lengths
+                    WHERE length(v.term) >= lengths.n
+                    GROUP BY prefix, s.entry_id
+                ) AS dedup
+            )
+            WHERE group_size > {_PREFIX_TOP_THRESHOLD} AND rn <= {_PREFIX_TOP_CAP}
+            """
+        )
+        conn.execute('DROP TABLE temp.web_gloss_vocab')
+        conn.commit()
+        conn.execute('DETACH DATABASE gloss')
+        conn.execute('DETACH DATABASE core')
+        conn.execute('PRAGMA user_version = 1')
+        conn.commit()
+        conn.execute('VACUUM')
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _rebuild_gloss_fts(conn):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'GlossSearchFts'").fetchone():
         conn.execute("INSERT INTO GlossSearchFts(GlossSearchFts) VALUES ('rebuild')")
@@ -467,6 +557,12 @@ def split(src, out_dir, requested_langs, all_languages):
     for lang in gloss_langs:
         print(f'gloss {lang}', flush=True)
         _gloss(src, out_dir, lang)
+        print(f'web gloss {lang}', flush=True)
+        _web_gloss(
+            os.path.join(out_dir, 'sumatora_core.db'),
+            os.path.join(out_dir, f'sumatora_gloss_{lang}.db'),
+            out_dir, lang,
+        )
     for lang in example_langs:
         print(f'examples {lang}', flush=True)
         _examples(src, out_dir, lang)

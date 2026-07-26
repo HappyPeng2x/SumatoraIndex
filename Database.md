@@ -396,6 +396,47 @@ JOIN gloss_eng.Sense AS s ON s.sense_id = sg.sense_id
 WHERE GlossSearchFts MATCH ?;
 ```
 
+## Web Gloss Pack
+
+`sumatora_web_gloss_{lang}.db` is a small, range-request-friendly reverse
+(translation) prefix index for the PWA's online mode, one file per gloss
+language, published alongside the corresponding `sumatora_gloss_{lang}.db`.
+
+```sql
+CREATE TABLE WebGlossPrefixTop (
+    prefix     TEXT NOT NULL,
+    sense_ord  INTEGER NOT NULL,
+    entry_id   INTEGER NOT NULL,
+    source_key INTEGER NOT NULL,
+    PRIMARY KEY (prefix, sense_ord, entry_id, source_key)
+) WITHOUT ROWID;
+```
+
+Same rationale and selection rule as `WebSearchPrefixTop` (see the Web Search
+Pack section above), applied to the reverse-gloss tier instead of the
+forward-word tier: any `prefix` with more than 50 raw candidate entries is
+materialized, capped to its top 80 rows ordered `sense_ord, entry_id` (the
+same tie-break the live reverse-gloss query already uses: first matching
+sense, then entry). Prefixes are read from `GlossSearchFts`'s own tokenizer
+output via `fts5vocab(..., 'instance')`, not `substr()`, since multi-word
+glosses tokenize on spaces (`"test drive"` → `test`, `drive`) exactly the
+way `WebSearchFts`'s tokenizer splits on the Japanese middle dot.
+
+Natural-language gloss prefixes are far broader than Japanese kana/kanji
+ones: against the real v18 English gloss pack, even 5-character prefixes
+average 22 candidates with some as high as ~3900, and shorter prefixes are
+far worse (a single letter averages over 20,000). This table exists because
+a live prefix scan over one of those is exactly what a single Latin letter
+typed mid-romaji-entry triggers online (the forward/word search finds
+nothing, so the reverse/gloss search runs) — one observed case took 215
+HTTP range requests and 15+ seconds before this fix.
+
+Unlike `WebSearchPrefixTop`, this pack carries only the covering index, no
+FTS5 table of its own: a prefix that wasn't broad enough to materialize
+falls back to live `GlossSearchFts` on the already-attached
+`sumatora_gloss_{lang}.db` for that language, exactly as before this pack
+existed.
+
 ## Suffix Search Pack
 
 `sumatora_search_suffix.db` contains fast substring/suffix lookup.

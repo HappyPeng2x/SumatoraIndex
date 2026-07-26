@@ -96,6 +96,10 @@ def _pack_metadata(filename):
     if name.startswith('gloss_'):
         lang = name[len('gloss_'):]
         return 'gloss', lang, _GLOSS_NATIVE_NAMES.get(lang, lang)
+    if name.startswith('web_gloss_'):
+        lang = name[len('web_gloss_'):]
+        native = _GLOSS_NATIVE_NAMES.get(lang, lang)
+        return 'web-gloss', lang, f'Online prefix search ({native})'
     if name.startswith('examples_'):
         lang = name[len('examples_'):]
         return 'tatoeba', lang, f'{_EXAMPLE_LANG_NAMES.get(lang, lang)} examples'
@@ -106,7 +110,7 @@ def _pack_metadata(filename):
 # grouped and alphabetized by language, so the manifest diffs cleanly
 # release to release instead of reordering on directory-listing order.
 _TYPE_ORDER = {'core': 0, 'web-search': 1, 'kanji': 2, 'pitch': 3, 'suffix': 4,
-               'names': 5, 'gloss': 6, 'tatoeba': 7}
+               'names': 5, 'gloss': 6, 'web-gloss': 7, 'tatoeba': 8}
 
 
 def _sort_key(pack):

@@ -168,6 +168,71 @@ jobs:
           print('web search pack validated')
           PY
 
+      - name: Validate web gloss packs
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sqlite3
+
+          checked = 0
+          for gloss_path in sorted(glob.glob('output/packs/sumatora_gloss_*.db')):
+              lang = gloss_path[len('output/packs/sumatora_gloss_'):-len('.db')]
+              path = f'output/packs/sumatora_web_gloss_{lang}.db'
+              db = sqlite3.connect(path)
+              assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+              assert db.execute('PRAGMA page_size').fetchone()[0] == 16384
+              columns = {row[1] for row in db.execute('PRAGMA table_info(WebGlossPrefixTop)')}
+              assert {'prefix', 'sense_ord', 'entry_id', 'source_key'} <= columns
+              assert db.execute('SELECT count(*) FROM WebGlossPrefixTop').fetchone()[0] > 0
+              max_group = db.execute("""
+                  SELECT max(cnt) FROM (
+                      SELECT count(*) AS cnt FROM WebGlossPrefixTop GROUP BY prefix
+                  )
+              """).fetchone()[0]
+              assert max_group <= 80
+
+              db.execute("ATTACH DATABASE ? AS gloss", (gloss_path,))
+              db.execute("ATTACH DATABASE 'output/packs/sumatora_core.db' AS core")
+              # Verify against fts5vocab (the same source the build reads
+              # prefixes from), not substr() against the whole gloss string --
+              # multi-word glosses tokenize on spaces, so a materialized
+              # prefix can legitimately match a non-initial token. A full
+              # anti-join over every row is too slow to run per language in
+              # CI (fts5vocab's 'instance' mode has no indexed lookup by doc,
+              # so each correlated check re-scans it); spot-check the
+              # broadest materialized prefix's rows instead, same style as
+              # WebSearchPrefixTop's single-prefix spot check above.
+              db.execute(
+                  "CREATE VIRTUAL TABLE temp.vocab "
+                  "USING fts5vocab('gloss', 'GlossSearchFts', 'instance')"
+              )
+              top_prefix = db.execute("""
+                  SELECT prefix FROM WebGlossPrefixTop
+                  GROUP BY prefix ORDER BY count(*) DESC LIMIT 1
+              """).fetchone()[0]
+              sample_ids = [row[0] for row in db.execute(
+                  "SELECT entry_id FROM WebGlossPrefixTop WHERE prefix = ? LIMIT 20",
+                  (top_prefix,),
+              )]
+              placeholders = ','.join('?' * len(sample_ids))
+              matched = {row[0] for row in db.execute(f"""
+                  SELECT DISTINCT s.entry_id
+                  FROM temp.vocab v
+                  JOIN gloss.SenseGloss sg ON sg.rowid = v.doc
+                  JOIN core.Sense s ON s.sense_id = sg.sense_id
+                  WHERE s.entry_id IN ({placeholders})
+                    AND substr(v.term, 1, length(?)) = ?
+              """, sample_ids + [top_prefix, top_prefix])}
+              assert set(sample_ids) <= matched, (
+                  f'{lang}: prefix {top_prefix!r} rows not backed by a real gloss token'
+              )
+              checked += 1
+              print(f'  {lang}: {db.execute("SELECT count(*) FROM WebGlossPrefixTop").fetchone()[0]} rows validated')
+
+          assert checked > 0
+          print(f'web gloss packs validated ({checked} languages)')
+          PY
+
       # Stage 1 (inside build-sumatora-db.py, above) just regenerated
       # ~/Code/gitmdict, gitnedict, gitjidic2, gitoeba, gitch from upstream.
       # Push each into its own repo so it stays a reusable, git-diffable
