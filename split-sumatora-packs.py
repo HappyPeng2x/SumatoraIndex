@@ -297,8 +297,18 @@ def _web_gloss(core_path, gloss_path, out_dir, lang):
     substr(), since multi-word glosses tokenize on spaces), applied to the
     reverse-gloss tier instead of the forward-word tier.
 
-    Unlike WebSearchPrefixTop, this pack carries only the covering index --
-    no FTS5 table of its own -- because the fallback path for prefixes that
+    Also carries WebGlossExactTop, the same acceleration for the *exact*-
+    match gloss tier (Android's "exact gloss" tier, tried before "prefix
+    gloss"). Word/forward search's exact tier is safely left unaccelerated
+    because homograph counts are inherently small, but that assumption does
+    not carry over to natural-language gloss text: a single common word as
+    someone's *entire* gloss is common (24523 entries have exactly "a" as an
+    English gloss token in real v18 data; 20848 have "the"), so the exact
+    tier needs the same fix as the prefix tier, just keyed by the full token
+    instead of a prefix of it.
+
+    Unlike WebSearchPrefixTop, this pack carries only the covering indexes --
+    no FTS5 table of its own -- because the fallback path for terms that
     weren't broad enough to materialize can just use the language's regular
     already-attached sumatora_gloss_{lang}.db pack's live GlossSearchFts,
     exactly as it does today.
@@ -321,6 +331,14 @@ def _web_gloss(core_path, gloss_path, out_dir, lang):
                 entry_id   INTEGER NOT NULL,
                 source_key INTEGER NOT NULL,
                 PRIMARY KEY (prefix, sense_ord, entry_id, source_key)
+            ) WITHOUT ROWID;
+
+            CREATE TABLE WebGlossExactTop (
+                term       TEXT NOT NULL,
+                sense_ord  INTEGER NOT NULL,
+                entry_id   INTEGER NOT NULL,
+                source_key INTEGER NOT NULL,
+                PRIMARY KEY (term, sense_ord, entry_id, source_key)
             ) WITHOUT ROWID;
             """
         )
@@ -356,6 +374,32 @@ def _web_gloss(core_path, gloss_path, out_dir, lang):
                     ) AS lengths
                     WHERE length(v.term) >= lengths.n
                     GROUP BY prefix, s.entry_id
+                ) AS dedup
+            )
+            WHERE group_size > {_PREFIX_TOP_THRESHOLD} AND rn <= {_PREFIX_TOP_CAP}
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO WebGlossExactTop(term, sense_ord, entry_id, source_key)
+            SELECT term, sense_ord, entry_id, source_key
+            FROM (
+                SELECT
+                    dedup.*,
+                    COUNT(*) OVER (PARTITION BY term) AS group_size,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY term ORDER BY sense_ord, entry_id
+                    ) AS rn
+                FROM (
+                    SELECT
+                        v.term AS term,
+                        MIN(s.ord) AS sense_ord, s.entry_id AS entry_id,
+                        CAST(e.source_key AS INTEGER) AS source_key
+                    FROM temp.web_gloss_vocab AS v
+                    JOIN gloss.SenseGloss AS sg ON sg.rowid = v.doc
+                    JOIN core.Sense AS s ON s.sense_id = sg.sense_id
+                    JOIN core.Entry AS e ON e.entry_id = s.entry_id
+                    GROUP BY term, s.entry_id
                 ) AS dedup
             )
             WHERE group_size > {_PREFIX_TOP_THRESHOLD} AND rn <= {_PREFIX_TOP_CAP}

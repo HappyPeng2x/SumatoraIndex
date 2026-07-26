@@ -431,9 +431,36 @@ typed mid-romaji-entry triggers online (the forward/word search finds
 nothing, so the reverse/gloss search runs) — one observed case took 215
 HTTP range requests and 15+ seconds before this fix.
 
-Unlike `WebSearchPrefixTop`, this pack carries only the covering index, no
-FTS5 table of its own: a prefix that wasn't broad enough to materialize
-falls back to live `GlossSearchFts` on the already-attached
+The same pack also carries `WebGlossExactTop`, for Android's *exact* gloss
+tier (tried before the prefix tier):
+
+```sql
+CREATE TABLE WebGlossExactTop (
+    term       TEXT NOT NULL,
+    sense_ord  INTEGER NOT NULL,
+    entry_id   INTEGER NOT NULL,
+    source_key INTEGER NOT NULL,
+    PRIMARY KEY (term, sense_ord, entry_id, source_key)
+) WITHOUT ROWID;
+```
+
+Word/forward search's exact tier is safely left unaccelerated (see
+`WebSearchPrefixTop` above) because homograph counts are inherently small.
+That assumption does not carry over to gloss text: a single common word as
+someone's *entire* gloss is ordinary English (24523 entries have exactly
+`"a"` as a gloss token in real v18 data; 20848 have `"the"`; even `"t"` alone
+has 610), so the exact tier needs the identical fix, just keyed by the full
+token instead of a prefix of it. This was found live, after
+`WebGlossPrefixTop` alone shipped: typing a single letter with a much
+smaller exact-match count (e.g. `"w"`, 8 exact matches) worked fine, while
+one with a larger count (`"t"`, 610) hung indefinitely — the exact tier's
+live FTS scan has no timeout, so a synchronous HTTP-VFS read that needs
+enough scattered range requests can block the search worker forever, not
+just run slowly.
+
+Unlike `WebSearchPrefixTop`, this pack carries only the two covering
+indexes, no FTS5 table of its own: a prefix or term that wasn't broad enough
+to materialize falls back to live `GlossSearchFts` on the already-attached
 `sumatora_gloss_{lang}.db` for that language, exactly as before this pack
 existed.
 

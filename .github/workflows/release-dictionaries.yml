@@ -226,8 +226,47 @@ jobs:
               assert set(sample_ids) <= matched, (
                   f'{lang}: prefix {top_prefix!r} rows not backed by a real gloss token'
               )
+
+              exact_columns = {row[1] for row in db.execute('PRAGMA table_info(WebGlossExactTop)')}
+              assert {'term', 'sense_ord', 'entry_id', 'source_key'} <= exact_columns
+              n_exact = db.execute('SELECT count(*) FROM WebGlossExactTop').fetchone()[0]
+              # A small language can legitimately have no term whose exact-
+              # match count exceeds the threshold (e.g. Swedish's broadest
+              # exact match in real v18 data is 25, well under 50) -- an
+              # empty table is correct there, not a bug.
+              if n_exact > 0:
+                  max_exact_group = db.execute("""
+                      SELECT max(cnt) FROM (
+                          SELECT count(*) AS cnt FROM WebGlossExactTop GROUP BY term
+                      )
+                  """).fetchone()[0]
+                  assert max_exact_group <= 80
+                  top_term = db.execute("""
+                      SELECT term FROM WebGlossExactTop
+                      GROUP BY term ORDER BY count(*) DESC LIMIT 1
+                  """).fetchone()[0]
+                  exact_sample_ids = [row[0] for row in db.execute(
+                      "SELECT entry_id FROM WebGlossExactTop WHERE term = ? LIMIT 20",
+                      (top_term,),
+                  )]
+                  exact_placeholders = ','.join('?' * len(exact_sample_ids))
+                  exact_matched = {row[0] for row in db.execute(f"""
+                      SELECT DISTINCT s.entry_id
+                      FROM temp.vocab v
+                      JOIN gloss.SenseGloss sg ON sg.rowid = v.doc
+                      JOIN core.Sense s ON s.sense_id = sg.sense_id
+                      WHERE s.entry_id IN ({exact_placeholders}) AND v.term = ?
+                  """, exact_sample_ids + [top_term])}
+                  assert set(exact_sample_ids) <= exact_matched, (
+                      f'{lang}: exact term {top_term!r} rows not backed by a real gloss token'
+                  )
+
               checked += 1
-              print(f'  {lang}: {db.execute("SELECT count(*) FROM WebGlossPrefixTop").fetchone()[0]} rows validated')
+              print(
+                  f'  {lang}: {db.execute("SELECT count(*) FROM WebGlossPrefixTop").fetchone()[0]} '
+                  f'prefix rows, {db.execute("SELECT count(*) FROM WebGlossExactTop").fetchone()[0]} '
+                  'exact rows validated'
+              )
 
           assert checked > 0
           print(f'web gloss packs validated ({checked} languages)')
