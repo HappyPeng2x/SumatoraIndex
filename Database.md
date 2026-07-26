@@ -298,14 +298,16 @@ CREATE VIRTUAL TABLE WebSearchFts USING fts5(
     prefix='1 2 3 4'
 );
 
-CREATE TABLE WebSearchShortKanaPrefix (
+CREATE TABLE WebSearchPrefixTop (
+    script_order   INTEGER NOT NULL,
     prefix         TEXT NOT NULL,
     priority_class INTEGER NOT NULL,
     entry_score    INTEGER NOT NULL,
     entry_id       INTEGER NOT NULL,
     source_key     INTEGER NOT NULL,
     PRIMARY KEY (
-        prefix, priority_class, entry_score DESC, entry_id, source_key
+        script_order, prefix, priority_class,
+        entry_score DESC, entry_id, source_key
     )
 ) WITHOUT ROWID;
 ```
@@ -324,10 +326,32 @@ The database is optimized for latency rather than minimum artifact size:
 - `script_order`, `priority`, `entry_score`, and `entry_id` preserve Android's
   tier, rank, and deterministic tie-break ordering without querying the core
   pack.
-- `WebSearchShortKanaPrefix` covers one- and two-character kana prefixes in
-  Android order. Two-letter romaji input commonly normalizes to these broad
-  prefixes; the covering table returns one page directly instead of sorting
-  thousands of FTS postings across hundreds of remote range reads.
+- `WebSearchPrefixTop` covers whichever `(script, prefix)` pairs are actually
+  broad, not a fixed prefix length. At build time, every prefix of every
+  `word` search term (lengths 1-8, either script) is counted; any
+  `(script_order, prefix, priority_class)` group with more than 50 raw
+  candidates is materialized, capped to its top 80 rows (already sorted in
+  Android tier order: `entry_score DESC, entry_id`). A length-based cutoff
+  doesn't work here — breadth doesn't track length. One-character kana
+  prefixes average 3000+ candidates, but so do a handful of common single
+  kanji (大: 2158) and even some three-character kana prefixes (ショウ:
+  2000), while most three- and four-character prefixes of either script have
+  only a few candidates and are already cheap to query live. Against a real
+  v14-era database this selects ~2600 groups (~190K rows total) — smaller
+  than a naive "every 1-2 char kana prefix" table, while covering every
+  script and length that actually needs it. A query for a prefix that
+  wasn't broad enough to materialize simply finds no rows and falls back to
+  live FTS, which is fine because narrow prefixes are cheap regardless.
+
+  Prefixes are generated from `WebSearchFts`'s own tokenizer output (via
+  `fts5vocab('main', 'WebSearchFts', 'instance')`), not from
+  `substr(normalized, 1, n)`. Some `normalized` values contain an internal
+  separator (e.g. the middle dot in `アーリー・アメリカン`), which the
+  tokenizer splits into two tokens (`アーリー`, `アメリカン`); a `MATCH`
+  query can match the second token even though the whole string doesn't
+  start with it. Reading prefixes from the same token index `MATCH` itself
+  reads from guarantees agreement, without reimplementing FTS5's tokenizer
+  rules by hand.
 
 ## Gloss Language Packs
 

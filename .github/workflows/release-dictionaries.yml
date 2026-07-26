@@ -115,15 +115,23 @@ jobs:
           columns = {row[1] for row in db.execute('PRAGMA table_info(WebSearchResult)')}
           assert {'entry_id', 'script_order', 'priority', 'entry_score'} <= columns
           assert db.execute('SELECT count(*) FROM WebSearchResult').fetchone()[0] > 0
-          short_columns = {
-              row[1] for row in db.execute('PRAGMA table_info(WebSearchShortKanaPrefix)')
+          top_columns = {
+              row[1] for row in db.execute('PRAGMA table_info(WebSearchPrefixTop)')
           }
           assert {
-              'prefix', 'priority_class', 'entry_score', 'entry_id', 'source_key'
-          } <= short_columns
+              'script_order', 'prefix', 'priority_class',
+              'entry_score', 'entry_id', 'source_key',
+          } <= top_columns
           assert db.execute(
-              "SELECT count(*) FROM WebSearchShortKanaPrefix"
+              "SELECT count(*) FROM WebSearchPrefixTop"
           ).fetchone()[0] > 0
+          max_group = db.execute("""
+              SELECT max(cnt) FROM (
+                  SELECT count(*) AS cnt FROM WebSearchPrefixTop
+                  GROUP BY script_order, prefix, priority_class
+              )
+          """).fetchone()[0]
+          assert max_group <= 80
           db.execute("ATTACH DATABASE 'output/sumatora.db' AS source")
           mismatches = db.execute("""
               SELECT count(*)
@@ -149,14 +157,14 @@ jobs:
           """).fetchall()
           assert rows
           assert rows == sorted(rows, key=lambda row: (-row[1], row[0]))
-          short_rows = db.execute("""
+          top_rows = db.execute("""
               SELECT source_key
-              FROM WebSearchShortKanaPrefix
-              WHERE prefix = 'マ' AND priority_class = 1
+              FROM WebSearchPrefixTop
+              WHERE script_order = 1 AND prefix = 'マ' AND priority_class = 1
               ORDER BY entry_score DESC, entry_id
               LIMIT 30
           """).fetchall()
-          assert short_rows
+          assert top_rows
           print('web search pack validated')
           PY
 

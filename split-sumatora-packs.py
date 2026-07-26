@@ -22,6 +22,18 @@ HELP = (
     '[--lang <code>] [--all-languages]'
 )
 
+# WebSearchPrefixTop materializes only prefixes broad enough to make a live
+# FTS5 scan expensive over HTTP range requests: those with more raw candidate
+# entries than _PREFIX_TOP_THRESHOLD, for prefix lengths 1.._PREFIX_TOP_MAX_LEN
+# of either script. Each materialized (script, prefix, priority_class) group
+# is capped to its top _PREFIX_TOP_CAP rows (already sorted in Android tier
+# order) -- comfortably above MAX_ONLINE_RESULTS (54 in the PWA) plus the
+# runtime's over-fetch margin for entries already consumed by the exact-match
+# tier. See split-sumatora-packs.py's _web_search() and Database.md.
+_PREFIX_TOP_THRESHOLD = 50
+_PREFIX_TOP_CAP = 80
+_PREFIX_TOP_MAX_LEN = 8
+
 _DROP_CORE = (
     'PitchPattern', 'FormPitch', 'PitchAccent',
     'KanjiMeaning', 'KanjiReading', 'KanjiEntry',
@@ -155,20 +167,27 @@ def _web_search(src, out_dir):
                 entry_score INTEGER NOT NULL
             );
 
-            -- Two-letter romaji input commonly normalizes to a one- or
-            -- two-character katakana prefix (ma -> マ, jo -> ジョ). FTS5
-            -- must enumerate thousands of postings before it can rank those
-            -- broad prefixes, which is cheap locally but causes hundreds of
-            -- HTTP range reads. This covering table is ordered exactly as
-            -- Android's kana priority tiers and can stop after one UI page.
-            CREATE TABLE WebSearchShortKanaPrefix (
+            -- Some prefixes (either script, any length) match thousands of
+            -- entries -- one-character kana prefixes average 3000+
+            -- candidates, but so do a handful of common single kanji and
+            -- even some 3-character kana prefixes. FTS5 must enumerate every
+            -- posting for a prefix before it can rank them, which is cheap
+            -- locally but causes hundreds of HTTP range reads online. This
+            -- covering table pre-ranks exactly the prefixes broad enough to
+            -- need it -- selected by candidate count, not by prefix length
+            -- or script -- in Android's tier order, so a query can stop
+            -- after one indexed seek instead of sorting the whole posting
+            -- list.
+            CREATE TABLE WebSearchPrefixTop (
+                script_order   INTEGER NOT NULL,
                 prefix         TEXT NOT NULL,
                 priority_class INTEGER NOT NULL,
                 entry_score    INTEGER NOT NULL,
                 entry_id       INTEGER NOT NULL,
                 source_key     INTEGER NOT NULL,
                 PRIMARY KEY (
-                    prefix, priority_class, entry_score DESC, entry_id, source_key
+                    script_order, prefix, priority_class,
+                    entry_score DESC, entry_id, source_key
                 )
             ) WITHOUT ROWID;
 
@@ -204,23 +223,55 @@ def _web_search(src, out_dir):
             SELECT st.search_id, st.normalized
             """ + source_filter
         )
+        # WebSearchFts's tokenizer splits on internal separators (e.g. the
+        # middle dot in "アーリー・アメリカン"), so a MATCH query can match a
+        # later token that a naive substr(normalized, 1, n) prefix would
+        # never see. fts5vocab's 'instance' mode reads the index's own
+        # token->rowid postings directly, so prefixes generated from it are
+        # guaranteed to agree with what MATCH actually finds at query time --
+        # unlike re-deriving tokenization rules by hand, which would have to
+        # track FTS5's tokenizer exactly to stay correct.
         conn.execute(
-            """
-            INSERT INTO WebSearchShortKanaPrefix(
-                prefix, priority_class, entry_score, entry_id, source_key
+            "CREATE VIRTUAL TABLE temp.web_search_vocab "
+            "USING fts5vocab('main', 'WebSearchFts', 'instance')"
+        )
+        conn.execute(
+            f"""
+            INSERT INTO WebSearchPrefixTop(
+                script_order, prefix, priority_class, entry_score, entry_id, source_key
             )
-            SELECT substr(st.normalized, 1, lengths.n),
-                   CASE WHEN MAX(st.priority) > 0 THEN 1 ELSE 0 END,
-                   e.score, e.entry_id, CAST(e.source_key AS INTEGER)
-            FROM source.SearchTerm AS st
-            JOIN source.Entry AS e ON e.entry_id = st.entry_id
-            JOIN (SELECT 1 AS n UNION ALL SELECT 2) AS lengths
-            WHERE e.entry_type = 'word'
-              AND st.script = 'kana'
-              AND length(st.normalized) >= lengths.n
-            GROUP BY 1, e.entry_id
+            SELECT script_order, prefix, priority_class, entry_score, entry_id, source_key
+            FROM (
+                SELECT
+                    dedup.*,
+                    COUNT(*) OVER (
+                        PARTITION BY script_order, prefix, priority_class
+                    ) AS group_size,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY script_order, prefix, priority_class
+                        ORDER BY entry_score DESC, entry_id
+                    ) AS rn
+                FROM (
+                    SELECT
+                        wr.script_order AS script_order,
+                        substr(v.term, 1, lengths.n) AS prefix,
+                        CASE WHEN MAX(wr.priority) > 0 THEN 1 ELSE 0 END AS priority_class,
+                        wr.entry_score AS entry_score, wr.entry_id AS entry_id,
+                        wr.source_key AS source_key
+                    FROM temp.web_search_vocab AS v
+                    JOIN WebSearchResult AS wr ON wr.search_id = v.doc
+                    JOIN (
+                        SELECT 1 AS n
+                        {''.join(f' UNION ALL SELECT {n}' for n in range(2, _PREFIX_TOP_MAX_LEN + 1))}
+                    ) AS lengths
+                    WHERE length(v.term) >= lengths.n
+                    GROUP BY wr.script_order, prefix, wr.entry_id
+                ) AS dedup
+            )
+            WHERE group_size > {_PREFIX_TOP_THRESHOLD} AND rn <= {_PREFIX_TOP_CAP}
             """
         )
+        conn.execute('DROP TABLE temp.web_search_vocab')
         conn.execute("INSERT INTO WebSearchFts(WebSearchFts) VALUES ('optimize')")
         conn.commit()
         conn.execute('DETACH DATABASE source')
