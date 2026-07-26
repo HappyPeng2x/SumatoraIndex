@@ -297,6 +297,17 @@ CREATE VIRTUAL TABLE WebSearchFts USING fts5(
     detail=column,
     prefix='1 2 3 4'
 );
+
+CREATE TABLE WebSearchShortKanaPrefix (
+    prefix         TEXT NOT NULL,
+    priority_class INTEGER NOT NULL,
+    entry_score    INTEGER NOT NULL,
+    entry_id       INTEGER NOT NULL,
+    source_key     INTEGER NOT NULL,
+    PRIMARY KEY (
+        prefix, priority_class, entry_score DESC, entry_id, source_key
+    )
+) WITHOUT ROWID;
 ```
 
 Only `word` terms in the `writing`, `kana`, and `romaji` scripts are included.
@@ -313,6 +324,10 @@ The database is optimized for latency rather than minimum artifact size:
 - `script_order`, `priority`, `entry_score`, and `entry_id` preserve Android's
   tier, rank, and deterministic tie-break ordering without querying the core
   pack.
+- `WebSearchShortKanaPrefix` covers one- and two-character kana prefixes in
+  Android order. Two-letter romaji input commonly normalizes to these broad
+  prefixes; the covering table returns one page directly instead of sorting
+  thousands of FTS postings across hundreds of remote range reads.
 
 ## Gloss Language Packs
 

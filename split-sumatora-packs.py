@@ -155,6 +155,23 @@ def _web_search(src, out_dir):
                 entry_score INTEGER NOT NULL
             );
 
+            -- Two-letter romaji input commonly normalizes to a one- or
+            -- two-character katakana prefix (ma -> マ, jo -> ジョ). FTS5
+            -- must enumerate thousands of postings before it can rank those
+            -- broad prefixes, which is cheap locally but causes hundreds of
+            -- HTTP range reads. This covering table is ordered exactly as
+            -- Android's kana priority tiers and can stop after one UI page.
+            CREATE TABLE WebSearchShortKanaPrefix (
+                prefix         TEXT NOT NULL,
+                priority_class INTEGER NOT NULL,
+                entry_score    INTEGER NOT NULL,
+                entry_id       INTEGER NOT NULL,
+                source_key     INTEGER NOT NULL,
+                PRIMARY KEY (
+                    prefix, priority_class, entry_score DESC, entry_id, source_key
+                )
+            ) WITHOUT ROWID;
+
             CREATE VIRTUAL TABLE WebSearchFts USING fts5(
                 normalized,
                 content='',
@@ -187,10 +204,27 @@ def _web_search(src, out_dir):
             SELECT st.search_id, st.normalized
             """ + source_filter
         )
+        conn.execute(
+            """
+            INSERT INTO WebSearchShortKanaPrefix(
+                prefix, priority_class, entry_score, entry_id, source_key
+            )
+            SELECT substr(st.normalized, 1, lengths.n),
+                   CASE WHEN MAX(st.priority) > 0 THEN 1 ELSE 0 END,
+                   e.score, e.entry_id, CAST(e.source_key AS INTEGER)
+            FROM source.SearchTerm AS st
+            JOIN source.Entry AS e ON e.entry_id = st.entry_id
+            JOIN (SELECT 1 AS n UNION ALL SELECT 2) AS lengths
+            WHERE e.entry_type = 'word'
+              AND st.script = 'kana'
+              AND length(st.normalized) >= lengths.n
+            GROUP BY 1, e.entry_id
+            """
+        )
         conn.execute("INSERT INTO WebSearchFts(WebSearchFts) VALUES ('optimize')")
         conn.commit()
         conn.execute('DETACH DATABASE source')
-        conn.execute('PRAGMA user_version = 1')
+        conn.execute('PRAGMA user_version = 2')
         conn.commit()
         conn.execute('VACUUM')
         conn.commit()

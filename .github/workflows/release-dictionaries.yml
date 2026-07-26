@@ -115,6 +115,15 @@ jobs:
           columns = {row[1] for row in db.execute('PRAGMA table_info(WebSearchResult)')}
           assert {'entry_id', 'script_order', 'priority', 'entry_score'} <= columns
           assert db.execute('SELECT count(*) FROM WebSearchResult').fetchone()[0] > 0
+          short_columns = {
+              row[1] for row in db.execute('PRAGMA table_info(WebSearchShortKanaPrefix)')
+          }
+          assert {
+              'prefix', 'priority_class', 'entry_score', 'entry_id', 'source_key'
+          } <= short_columns
+          assert db.execute(
+              "SELECT count(*) FROM WebSearchShortKanaPrefix"
+          ).fetchone()[0] > 0
           db.execute("ATTACH DATABASE 'output/sumatora.db' AS source")
           mismatches = db.execute("""
               SELECT count(*)
@@ -140,6 +149,14 @@ jobs:
           """).fetchall()
           assert rows
           assert rows == sorted(rows, key=lambda row: (-row[1], row[0]))
+          short_rows = db.execute("""
+              SELECT source_key
+              FROM WebSearchShortKanaPrefix
+              WHERE prefix = 'マ' AND priority_class = 1
+              ORDER BY entry_score DESC, entry_id
+              LIMIT 30
+          """).fetchall()
+          assert short_rows
           print('web search pack validated')
           PY
 
