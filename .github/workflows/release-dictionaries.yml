@@ -105,7 +105,43 @@ jobs:
 
       - name: Validate web search pack
         run: |
-          python3 -c "import sqlite3; p='output/packs/sumatora_web_search.db'; c=sqlite3.connect(p); assert c.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; assert c.execute('PRAGMA page_size').fetchone()[0] == 16384; assert c.execute('SELECT count(*) FROM WebSearchResult').fetchone()[0] > 0; c.execute(\"SELECT rowid FROM WebSearchFts WHERE normalized MATCH 'test*' LIMIT 1\").fetchall(); print('web search pack validated')"
+          python3 - <<'PY'
+          import sqlite3
+
+          path = 'output/packs/sumatora_web_search.db'
+          db = sqlite3.connect(path)
+          assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+          assert db.execute('PRAGMA page_size').fetchone()[0] == 16384
+          columns = {row[1] for row in db.execute('PRAGMA table_info(WebSearchResult)')}
+          assert {'entry_id', 'script_order', 'priority', 'entry_score'} <= columns
+          assert db.execute('SELECT count(*) FROM WebSearchResult').fetchone()[0] > 0
+          db.execute("ATTACH DATABASE 'output/sumatora.db' AS source")
+          mismatches = db.execute("""
+              SELECT count(*)
+              FROM WebSearchResult wr
+              JOIN source.SearchTerm st ON st.search_id = wr.search_id
+              JOIN source.Entry e ON e.entry_id = st.entry_id
+              WHERE wr.entry_id != e.entry_id
+                 OR wr.entry_score != e.score
+                 OR wr.priority != st.priority
+                 OR wr.script_order != CASE st.script
+                       WHEN 'writing' THEN 0 WHEN 'kana' THEN 1 ELSE 2 END
+          """).fetchone()[0]
+          assert mismatches == 0
+          rows = db.execute("""
+              SELECT entry_id, entry_score
+              FROM WebSearchResult
+              WHERE search_id IN (
+                  SELECT rowid FROM WebSearchFts
+                  WHERE normalized MATCH '"test"*'
+              )
+              ORDER BY entry_score DESC, entry_id
+              LIMIT 30
+          """).fetchall()
+          assert rows
+          assert rows == sorted(rows, key=lambda row: (-row[1], row[0]))
+          print('web search pack validated')
+          PY
 
       # Stage 1 (inside build-sumatora-db.py, above) just regenerated
       # ~/Code/gitmdict, gitnedict, gitjidic2, gitoeba, gitch from upstream.

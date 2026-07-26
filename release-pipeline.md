@@ -73,8 +73,8 @@ rationale):
    reflect a from-scratch, reproducible build, not runner-specific leftover
    state.
    The split includes `sumatora_web_search.db`, a contentless FTS5 index with
-   prefix indexes and direct JMdict sequence mappings for the PWA's
-   latency-sensitive HTTP-range search path.
+   prefix indexes, direct JMdict sequence mappings, and Android-compatible
+   ordering keys for the PWA's latency-sensitive HTTP-range search path.
 2. Gzips each pack and computes its SHA-256 (`release-dictionaries.py`).
 3. Publishes a GitHub Release tagged `dictionaries-v{N}` with the gzipped
    packs as assets.

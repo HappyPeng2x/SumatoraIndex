@@ -284,8 +284,10 @@ It is built from scratch rather than by pruning `sumatora_core.db`:
 CREATE TABLE WebSearchResult (
     search_id  INTEGER PRIMARY KEY,
     source_key INTEGER NOT NULL,
+    entry_id   INTEGER NOT NULL,
+    script_order INTEGER NOT NULL,
     priority   INTEGER NOT NULL,
-    score      INTEGER NOT NULL
+    entry_score INTEGER NOT NULL
 );
 
 CREATE VIRTUAL TABLE WebSearchFts USING fts5(
@@ -308,6 +310,9 @@ The database is optimized for latency rather than minimum artifact size:
   cold reads excessively large.
 - `Entry.source_key` is stored directly, avoiding access to the full core pack
   before fetching gitender content.
+- `script_order`, `priority`, `entry_score`, and `entry_id` preserve Android's
+  tier, rank, and deterministic tie-break ordering without querying the core
+  pack.
 
 ## Gloss Language Packs
 

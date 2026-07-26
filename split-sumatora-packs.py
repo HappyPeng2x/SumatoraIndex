@@ -149,8 +149,10 @@ def _web_search(src, out_dir):
             CREATE TABLE WebSearchResult (
                 search_id  INTEGER PRIMARY KEY,
                 source_key INTEGER NOT NULL,
+                entry_id   INTEGER NOT NULL,
+                script_order INTEGER NOT NULL,
                 priority   INTEGER NOT NULL,
-                score      INTEGER NOT NULL
+                entry_score INTEGER NOT NULL
             );
 
             CREATE VIRTUAL TABLE WebSearchFts USING fts5(
@@ -171,8 +173,12 @@ def _web_search(src, out_dir):
         """
         conn.execute(
             """
-            INSERT INTO WebSearchResult(search_id, source_key, priority, score)
-            SELECT st.search_id, CAST(e.source_key AS INTEGER), st.priority, st.score
+            INSERT INTO WebSearchResult(
+                search_id, source_key, entry_id, script_order, priority, entry_score
+            )
+            SELECT st.search_id, CAST(e.source_key AS INTEGER), e.entry_id,
+                   CASE st.script WHEN 'writing' THEN 0 WHEN 'kana' THEN 1 ELSE 2 END,
+                   st.priority, e.score
             """ + source_filter
         )
         conn.execute(
