@@ -83,6 +83,8 @@ def _pack_metadata(filename):
 
     if name == 'core':
         return 'core', '', 'Index'
+    if name == 'web_search':
+        return 'web-search', '', 'Online prefix search'
     if name == 'kanji':
         return 'kanji', '', 'Kanji data'
     if name == 'pitch':
@@ -103,8 +105,8 @@ def _pack_metadata(filename):
 # Stable display order: core-ish singletons first, then gloss/tatoeba
 # grouped and alphabetized by language, so the manifest diffs cleanly
 # release to release instead of reordering on directory-listing order.
-_TYPE_ORDER = {'core': 0, 'kanji': 1, 'pitch': 2, 'suffix': 3, 'names': 4,
-               'gloss': 5, 'tatoeba': 6}
+_TYPE_ORDER = {'core': 0, 'web-search': 1, 'kanji': 2, 'pitch': 3, 'suffix': 4,
+               'names': 5, 'gloss': 6, 'tatoeba': 7}
 
 
 def _sort_key(pack):

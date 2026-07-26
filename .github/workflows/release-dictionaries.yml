@@ -103,6 +103,10 @@ jobs:
           python3 build-sumatora-db.py -o output/ --split-packs \
             ${{ steps.langs.outputs.flag }}
 
+      - name: Validate web search pack
+        run: |
+          python3 -c "import sqlite3; p='output/packs/sumatora_web_search.db'; c=sqlite3.connect(p); assert c.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; assert c.execute('PRAGMA page_size').fetchone()[0] == 16384; assert c.execute('SELECT count(*) FROM WebSearchResult').fetchone()[0] > 0; c.execute(\"SELECT rowid FROM WebSearchFts WHERE normalized MATCH 'test*' LIMIT 1\").fetchall(); print('web search pack validated')"
+
       # Stage 1 (inside build-sumatora-db.py, above) just regenerated
       # ~/Code/gitmdict, gitnedict, gitjidic2, gitoeba, gitch from upstream.
       # Push each into its own repo so it stays a reusable, git-diffable

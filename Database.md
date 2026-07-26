@@ -271,6 +271,44 @@ CREATE VIRTUAL TABLE SearchTermFts USING fts5(
 
 `columnsize=0` keeps FTS matching but avoids FTS docsize storage.
 
+## Web Search Pack
+
+`sumatora_web_search.db` is a read-only forward-search index for the PWA's
+online mode. It is published uncompressed so SQLite WASM can query it through
+HTTP range requests, then use the returned JMdict sequence numbers to fetch
+pre-rendered entries from gitender.
+
+It is built from scratch rather than by pruning `sumatora_core.db`:
+
+```sql
+CREATE TABLE WebSearchResult (
+    search_id  INTEGER PRIMARY KEY,
+    source_key INTEGER NOT NULL,
+    priority   INTEGER NOT NULL,
+    score      INTEGER NOT NULL
+);
+
+CREATE VIRTUAL TABLE WebSearchFts USING fts5(
+    normalized,
+    content='',
+    columnsize=0,
+    detail=column,
+    prefix='1 2 3 4'
+);
+```
+
+Only `word` terms in the `writing`, `kana`, and `romaji` scripts are included.
+`WebSearchFts.rowid` equals `WebSearchResult.search_id`.
+
+The database is optimized for latency rather than minimum artifact size:
+
+- Contentless FTS avoids storing normalized terms twice.
+- One-to-four-character FTS prefix indexes accelerate short prefixes.
+- A 16 KiB SQLite page size reduces range requests without making random
+  cold reads excessively large.
+- `Entry.source_key` is stored directly, avoiding access to the full core pack
+  before fetching gitender content.
+
 ## Gloss Language Packs
 
 `sumatora_gloss_{lang}.db` contains one language's translations.

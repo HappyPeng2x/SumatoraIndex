@@ -129,6 +129,69 @@ def _rebuild_search_fts(conn):
         conn.execute("INSERT INTO SearchTermFts(SearchTermFts) VALUES ('rebuild')")
 
 
+def _web_search(src, out_dir):
+    """Build the small, range-request-friendly index used by the PWA."""
+    path = os.path.join(out_dir, 'sumatora_web_search.db')
+    os.makedirs(out_dir, exist_ok=True)
+    if os.path.exists(path):
+        os.unlink(path)
+
+    conn = sqlite3.connect(path)
+    try:
+        # Larger pages reduce HTTP round trips while remaining small enough
+        # for random cold reads. Prefix indexes deliberately trade file size
+        # for latency on the common one-to-four-character web queries.
+        conn.execute('PRAGMA page_size = 16384')
+        conn.execute('PRAGMA journal_mode = OFF')
+        conn.execute('PRAGMA synchronous = OFF')
+        conn.executescript(
+            """
+            CREATE TABLE WebSearchResult (
+                search_id  INTEGER PRIMARY KEY,
+                source_key INTEGER NOT NULL,
+                priority   INTEGER NOT NULL,
+                score      INTEGER NOT NULL
+            );
+
+            CREATE VIRTUAL TABLE WebSearchFts USING fts5(
+                normalized,
+                content='',
+                columnsize=0,
+                detail=column,
+                prefix='1 2 3 4'
+            );
+            """
+        )
+        conn.execute('ATTACH DATABASE ? AS source', (src,))
+        source_filter = """
+            FROM source.SearchTerm AS st
+            JOIN source.Entry AS e ON e.entry_id = st.entry_id
+            WHERE e.entry_type = 'word'
+              AND st.script IN ('writing', 'kana', 'romaji')
+        """
+        conn.execute(
+            """
+            INSERT INTO WebSearchResult(search_id, source_key, priority, score)
+            SELECT st.search_id, CAST(e.source_key AS INTEGER), st.priority, st.score
+            """ + source_filter
+        )
+        conn.execute(
+            """
+            INSERT INTO WebSearchFts(rowid, normalized)
+            SELECT st.search_id, st.normalized
+            """ + source_filter
+        )
+        conn.execute("INSERT INTO WebSearchFts(WebSearchFts) VALUES ('optimize')")
+        conn.commit()
+        conn.execute('DETACH DATABASE source')
+        conn.execute('PRAGMA user_version = 1')
+        conn.commit()
+        conn.execute('VACUUM')
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _rebuild_gloss_fts(conn):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'GlossSearchFts'").fetchone():
         conn.execute("INSERT INTO GlossSearchFts(GlossSearchFts) VALUES ('rebuild')")
@@ -299,6 +362,8 @@ def split(src, out_dir, requested_langs, all_languages):
 
     print('core', flush=True)
     _core(src, out_dir)
+    print('web search', flush=True)
+    _web_search(src, out_dir)
     print('names', flush=True)
     _names(src, out_dir)
     print('suffix', flush=True)
