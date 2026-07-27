@@ -307,11 +307,12 @@ def _web_gloss(core_path, gloss_path, out_dir, lang):
     tier needs the same fix as the prefix tier, just keyed by the full token
     instead of a prefix of it.
 
-    Unlike WebSearchPrefixTop, this pack carries only the covering indexes --
-    no FTS5 table of its own -- because the fallback path for terms that
-    weren't broad enough to materialize can just use the language's regular
-    already-attached sumatora_gloss_{lang}.db pack's live GlossSearchFts,
-    exactly as it does today.
+    Version 2 adds GlossAll + GlossAllFts, a full-coverage FTS5 index that
+    carries pre-joined entry/sense data for every gloss token, not just the
+    busiest ones. Terms too narrow for the covering tables fall back to this
+    self-contained index instead of the old cross-pack live-FTS JOIN (gloss
+    pack -> core pack), which was fast locally but caused dozens of HTTP Range
+    requests online for each matched sense.
     """
     path = os.path.join(out_dir, f'sumatora_web_gloss_{lang}.db')
     os.makedirs(out_dir, exist_ok=True)
@@ -340,6 +341,28 @@ def _web_gloss(core_path, gloss_path, out_dir, lang):
                 source_key INTEGER NOT NULL,
                 PRIMARY KEY (term, sense_ord, entry_id, source_key)
             ) WITHOUT ROWID;
+
+            -- Full-coverage FTS5 fallback for terms not in the covering
+            -- tables. GlossAll pre-joins every SenseGloss row with its
+            -- Sense and Entry data so the FTS query never needs to touch
+            -- the core pack. detail=none because we only need rowid
+            -- lookup (no matchinfo/highlight), saving ~40% space.
+            -- Table-level MATCH (GlossAllFts MATCH '...') is required
+            -- since detail=none disables column-qualified queries.
+            CREATE TABLE GlossAll (
+                rowid INTEGER PRIMARY KEY,
+                entry_id INTEGER NOT NULL,
+                source_key INTEGER NOT NULL,
+                sense_ord INTEGER NOT NULL
+            );
+
+            CREATE VIRTUAL TABLE GlossAllFts USING fts5(
+                term,
+                content='',
+                columnsize=0,
+                detail=none,
+                prefix='1 2 3 4 5 6 7 8'
+            );
             """
         )
         conn.execute('ATTACH DATABASE ? AS gloss', (gloss_path,))
@@ -406,10 +429,31 @@ def _web_gloss(core_path, gloss_path, out_dir, lang):
             """
         )
         conn.execute('DROP TABLE temp.web_gloss_vocab')
+
+        # Populate the full-coverage FTS5 fallback. Every SenseGloss row
+        # gets a corresponding row in GlossAll (pre-joined with entry/
+        # sense data) and GlossAllFts (FTS5 index on the gloss text).
+        conn.execute(
+            """
+            INSERT INTO GlossAll(rowid, entry_id, source_key, sense_ord)
+            SELECT sg.rowid, s.entry_id, CAST(e.source_key AS INTEGER), s.ord
+            FROM gloss.SenseGloss AS sg
+            JOIN core.Sense AS s ON s.sense_id = sg.sense_id
+            JOIN core.Entry AS e ON e.entry_id = s.entry_id
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO GlossAllFts(rowid, term)
+            SELECT sg.rowid, sg.text
+            FROM gloss.SenseGloss AS sg
+            """
+        )
+        conn.execute("INSERT INTO GlossAllFts(GlossAllFts) VALUES ('optimize')")
         conn.commit()
         conn.execute('DETACH DATABASE gloss')
         conn.execute('DETACH DATABASE core')
-        conn.execute('PRAGMA user_version = 1')
+        conn.execute('PRAGMA user_version = 2')
         conn.commit()
         conn.execute('VACUUM')
         conn.commit()

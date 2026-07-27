@@ -402,6 +402,8 @@ WHERE GlossSearchFts MATCH ?;
 (translation) prefix index for the PWA's online mode, one file per gloss
 language, published alongside the corresponding `sumatora_gloss_{lang}.db`.
 
+### Pack version 1 (covering indexes only, `user_version = 1`)
+
 ```sql
 CREATE TABLE WebGlossPrefixTop (
     prefix     TEXT NOT NULL,
@@ -409,6 +411,14 @@ CREATE TABLE WebGlossPrefixTop (
     entry_id   INTEGER NOT NULL,
     source_key INTEGER NOT NULL,
     PRIMARY KEY (prefix, sense_ord, entry_id, source_key)
+) WITHOUT ROWID;
+
+CREATE TABLE WebGlossExactTop (
+    term       TEXT NOT NULL,
+    sense_ord  INTEGER NOT NULL,
+    entry_id   INTEGER NOT NULL,
+    source_key INTEGER NOT NULL,
+    PRIMARY KEY (term, sense_ord, entry_id, source_key)
 ) WITHOUT ROWID;
 ```
 
@@ -434,16 +444,6 @@ HTTP range requests and 15+ seconds before this fix.
 The same pack also carries `WebGlossExactTop`, for Android's *exact* gloss
 tier (tried before the prefix tier):
 
-```sql
-CREATE TABLE WebGlossExactTop (
-    term       TEXT NOT NULL,
-    sense_ord  INTEGER NOT NULL,
-    entry_id   INTEGER NOT NULL,
-    source_key INTEGER NOT NULL,
-    PRIMARY KEY (term, sense_ord, entry_id, source_key)
-) WITHOUT ROWID;
-```
-
 Word/forward search's exact tier is safely left unaccelerated (see
 `WebSearchPrefixTop` above) because homograph counts are inherently small.
 That assumption does not carry over to gloss text: a single common word as
@@ -458,11 +458,131 @@ live FTS scan has no timeout, so a synchronous HTTP-VFS read that needs
 enough scattered range requests can block the search worker forever, not
 just run slowly.
 
-Unlike `WebSearchPrefixTop`, this pack carries only the two covering
-indexes, no FTS5 table of its own: a prefix or term that wasn't broad enough
-to materialize falls back to live `GlossSearchFts` on the already-attached
-`sumatora_gloss_{lang}.db` for that language, exactly as before this pack
-existed.
+In v1, the pack carries only the two covering indexes — no full FTS5 table.
+A prefix or term that wasn't broad enough to materialize falls back to a
+live `GlossSearchFts` query on the already-attached
+`sumatora_gloss_{lang}.db`, joined across to the core pack:
+
+```sql
+SELECT s.entry_id, e.source_key, s.ord
+FROM gloss_eng.SenseGloss sg
+JOIN main.Sense s ON s.sense_id = sg.sense_id
+JOIN main.Entry e ON e.entry_id = s.entry_id
+WHERE sg.rowid IN (
+  SELECT rowid FROM gloss_eng.GlossSearchFts WHERE text MATCH ?
+)
+```
+
+This cross-pack JOIN is fast locally (SQLite does indexed lookups into both
+files on disk) but expensive over HTTP: each matched sense requires a random
+page read into the 200 MB core pack. With the HTTP VFS cache at 16 MB, most
+miss, and each miss is a synchronous `XMLHttpRequest`. A narrow term like
+"therefore" matching ~60 gloss entries causes ~120 random core-pack reads
+— measured at 97 HTTP Range requests taking 3-4 seconds online.
+
+### Pack version 2 (covering indexes + full FTS5 fallback, `user_version = 2`)
+
+Version 2 adds a self-contained FTS5 fallback that eliminates the cross-pack
+JOIN entirely:
+
+```sql
+-- Pre-joined data: one row per SenseGloss.rowid, with the sense/entry
+-- columns the gloss search needs. No JOIN to core at query time.
+CREATE TABLE GlossAll (
+    rowid INTEGER PRIMARY KEY,
+    entry_id INTEGER NOT NULL,
+    source_key INTEGER NOT NULL,
+    sense_ord INTEGER NOT NULL
+);
+
+-- Contentless FTS5 index (content='', columnsize=0) with detail=none.
+-- detail=none drops column-level detail storage (matchinfo/highlight),
+-- saving ~40% of the FTS index size, since the gloss search only needs
+-- rowid lookup. Table-level MATCH syntax is required (GlossAllFts MATCH
+-- '...') because detail=none disables column-qualified queries.
+CREATE VIRTUAL TABLE GlossAllFts USING fts5(
+    term,
+    content='',
+    columnsize=0,
+    detail=none,
+    prefix='1 2 3 4 5 6 7 8'
+);
+```
+
+These are populated at build time from the already-attached gloss and core
+packs:
+
+```sql
+-- Pre-join every SenseGloss row with its entry/sense data
+INSERT INTO GlossAll(rowid, entry_id, source_key, sense_ord)
+SELECT sg.rowid, s.entry_id, CAST(e.source_key AS INTEGER), s.ord
+FROM gloss.SenseGloss sg
+JOIN core.Sense s ON s.sense_id = sg.sense_id
+JOIN core.Entry e ON e.entry_id = s.entry_id;
+
+-- Index the raw gloss text (tokenized by FTS5's default tokenizer)
+INSERT INTO GlossAllFts(rowid, term)
+SELECT sg.rowid, sg.text
+FROM gloss.SenseGloss sg;
+```
+
+At query time, a term that misses the covering tables runs:
+
+```sql
+SELECT ga.entry_id, ga.source_key, ga.sense_ord
+FROM webgloss.GlossAll ga
+WHERE ga.rowid IN (
+  SELECT rowid FROM webgloss.GlossAllFts WHERE GlossAllFts MATCH '"therefore"*'
+)
+```
+
+Everything stays within the small webgloss pack — no cross-pack JOIN, no
+touching the 200 MB core pack at all. The FTS5 index and data table are
+contiguous within one 21 MB file, so even a broad prefix like `"the"*`
+(~23,000 matches) reads from sequentially-stored FTS postings, benefiting
+from the HTTP VFS's super-page merging.
+
+### Two-tier query strategy
+
+The PWA worker uses a three-tier fallback for reverse-gloss matching:
+
+1. **Covering table hit** (`WebGlossPrefixTop` / `WebGlossExactTop`): A
+   single indexed seek returns pre-ranked, pre-joined results for common
+   prefixes and terms. Instant — one HTTP Range request.
+
+2. **Full FTS5 fallback** (`GlossAllFts` + `GlossAll`, v2+): An FTS5 scan
+   within the webgloss pack, followed by a `GlossAll` lookup (single-pack
+   index seek per matched rowid). No core pack involved. Fast — ~10-30
+   HTTP Range requests for a typical prefix, served from contiguous pages
+   the super-page merger coalesces efficiently.
+
+3. **Cross-pack live-FTS fallback** (pre-v2 or no webgloss pack): FTS5 in
+   the gloss pack, JOINed to Sense and Entry in the core pack. This is the
+   slow fallback retained for backward compatibility with v1 webgloss packs
+   and for the local SQL-assembly path that already has the core pack open
+   on disk.
+
+For a PWA with a v2 webgloss pack, tier 2 serves every term that tier 1
+doesn't cover — the 3-4 second wait for uncommon English terms like
+"therefore" or "sycophant" drops to the same ~200-500 ms range as forward
+search.
+
+### Size
+
+Measured English pack output from `split-sumatora-packs.py`:
+
+| Version | Contents | Size |
+|---|---|---|
+| v1 | WebGlossPrefixTop, WebGlossExactTop | 21 MB |
+| **v2** | WebGlossPrefixTop, WebGlossExactTop, **GlossAll, GlossAllFts** | **41 MB** |
+
+The covering tables alone are 21 MB; adding the full FTS5 index brings the
+total to 41 MB. If the covering tables were removed in favor of the FTS5
+index alone (tier 2 for everything), the pack would be 21 MB — the same size
+as the current v1 pack, with complete coverage but without the single-seek
+fast path for the broadest prefixes. The combined 41 MB design keeps instant
+response for common prefixes while providing fast-enough fallback for
+everything else.
 
 ## Suffix Search Pack
 
