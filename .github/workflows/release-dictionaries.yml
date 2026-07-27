@@ -150,7 +150,7 @@ jobs:
               FROM WebSearchResult
               WHERE search_id IN (
                   SELECT rowid FROM WebSearchFts
-                  WHERE normalized MATCH '"test"*'
+                  WHERE normalized MATCH '"食べる"*'
               )
               ORDER BY entry_score DESC, entry_id
               LIMIT 30
